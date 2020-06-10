@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -146,9 +146,7 @@ func (i *InstanceGroup) write(w io.Writer, indent int, debugInfo *tableDebugInfo
 
 		for j, name := range instanceNames {
 			fmt.Fprintf(w, "%s[#%d]", idnt, j)
-			if debugInfo != nil {
-				fmt.Fprintf(w, " %s {I}", name)
-			}
+			fmt.Fprintf(w, " %s {I}", name)
 			fmt.Fprintln(w)
 		}
 	} else {

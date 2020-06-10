@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	dto "github.com/prometheus/client_model/go"
 
 	"istio.io/istio/mixer/adapter/prometheus/config"
@@ -446,21 +445,20 @@ func TestProm_HandleMetrics(t *testing.T) {
 					t.Errorf("HandleMetric() could not find metric with name %s:", adapterVal.Name)
 					continue
 				}
-				c := ci.c
 				m := new(dto.Metric)
-				switch c.(type) {
+				switch c := ci.c.(type) {
 				case *prometheus.CounterVec:
-					if err := c.(*prometheus.CounterVec).With(promLabels(adapterVal.Dimensions)).Write(m); err != nil {
+					if err := c.With(promLabels(adapterVal.Dimensions)).Write(m); err != nil {
 						t.Errorf("Error writing metric value to proto: %v", err)
 						continue
 					}
 				case *prometheus.GaugeVec:
-					if err := c.(*prometheus.GaugeVec).With(promLabels(adapterVal.Dimensions)).Write(m); err != nil {
+					if err := c.With(promLabels(adapterVal.Dimensions)).Write(m); err != nil {
 						t.Errorf("Error writing metric value to proto: %v", err)
 						continue
 					}
 				case *prometheus.HistogramVec:
-					if err := c.(*prometheus.HistogramVec).With(promLabels(adapterVal.Dimensions)).(prometheus.Metric).Write(m); err != nil {
+					if err := c.With(promLabels(adapterVal.Dimensions)).(prometheus.Metric).Write(m); err != nil {
 						t.Errorf("Error writing metric value to proto: %v", err)
 						continue
 					}
@@ -521,7 +519,7 @@ func TestComputeSha(t *testing.T) {
 }
 
 func TestMetricExpiration(t *testing.T) {
-
+	t.Skip("https://github.com/istio/istio/issues/17182")
 	testPolicy := expPolicy(50*time.Millisecond, 10*time.Millisecond)
 	altPolicy := expPolicy(50*time.Millisecond, 0)
 
@@ -534,11 +532,11 @@ func TestMetricExpiration(t *testing.T) {
 		checkWaitTime    time.Duration
 	}{
 		{"No expiration", metricInfos{counter}, metricInsts{counterVal}, metricInsts{}, nil, 0},
-		{"Single metric expiration (counter)", metricInfos{counter}, metricInsts{counterVal}, metricInsts{}, testPolicy, 100 * time.Millisecond},
-		{"Single metric expiration (counter, alt policy)", metricInfos{counter}, metricInsts{counterVal}, metricInsts{}, altPolicy, 100 * time.Millisecond},
-		{"Single metric expiration (gauge)", metricInfos{gaugeWithLabels}, metricInsts{gaugeWithLabelsVal}, metricInsts{}, testPolicy, 100 * time.Millisecond},
-		{"Single metric expiration (histogram)", metricInfos{histogram}, metricInsts{histogramVal}, metricInsts{}, testPolicy, 100 * time.Millisecond},
-		{"Preserve non-stale metrics", metricInfos{counter}, metricInsts{counterVal}, metricInsts{counterVal2}, testPolicy, 100 * time.Millisecond},
+		{"Single metric expiration (counter)", metricInfos{counter}, metricInsts{counterVal}, metricInsts{}, testPolicy, 200 * time.Millisecond},
+		{"Single metric expiration (counter, alt policy)", metricInfos{counter}, metricInsts{counterVal}, metricInsts{}, altPolicy, 200 * time.Millisecond},
+		{"Single metric expiration (gauge)", metricInfos{gaugeWithLabels}, metricInsts{gaugeWithLabelsVal}, metricInsts{}, testPolicy, 200 * time.Millisecond},
+		{"Single metric expiration (histogram)", metricInfos{histogram}, metricInsts{histogramVal}, metricInsts{}, testPolicy, 200 * time.Millisecond},
+		{"Preserve non-stale metrics", metricInfos{counter}, metricInsts{counterVal}, metricInsts{counterVal2}, testPolicy, 200 * time.Millisecond},
 	}
 
 	f := newBuilder(&testServer{})
@@ -683,8 +681,7 @@ func expPolicy(expiry, check time.Duration) *config.Params_MetricsExpirationPoli
 
 func TestPromLogger_Println(t *testing.T) {
 	testEnvLogger := test.NewEnv(t)
-	var underTest promhttp.Logger
-	underTest = &promLogger{logger: testEnvLogger}
+	underTest := &promLogger{logger: testEnvLogger}
 
 	underTest.Println("Istio Service Mesh", 94.5, false)
 

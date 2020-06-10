@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,6 +49,21 @@ func TestConvert(t *testing.T) {
 		if !reflect.DeepEqual(tt.dest, tt.expected) {
 			t.Errorf("%s: Got %+v, Want %+v", tt.title, tt.dest, tt.expected)
 		}
+	}
+
+	ev := BackendEvent{
+		Key: Key{
+			Kind: "handler",
+		},
+	}
+	want := Event{
+		Key: Key{
+			Kind: "handler",
+		},
+	}
+
+	if got, err := ConvertValue(ev, map[string]proto.Message{"handler": &cfg.Handler{}}); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("ConvertValue(%#v) => got %#v, %v, want %#v", ev, got, err, want)
 	}
 }
 

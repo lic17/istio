@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,9 +24,9 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/mcp/creds"
-	"istio.io/istio/pkg/probe"
+	"istio.io/pkg/log"
+	"istio.io/pkg/probe"
 )
 
 // ChangeType denotes the type of a change
@@ -107,9 +107,10 @@ type Event struct {
 	Value *Resource
 }
 
-// BackendValidator defines the interface to validte unstructured event.
+// BackendValidator defines the interface to validate unstructured event.
 type BackendValidator interface {
 	Validate(ev *BackendEvent) error
+	SupportsKind(string) bool
 }
 
 // Validator defines the interface to validate a new change.

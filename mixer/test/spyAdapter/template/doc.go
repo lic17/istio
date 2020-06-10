@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 // template.gen.go
 // nolint
-//go:generate go run $GOPATH/src/istio.io/istio/mixer/tools/codegen/cmd/mixgenbootstrap/main.go -f $GOPATH/src/istio.io/istio/mixer/test/spyAdapter/template/inventory.yaml -o $GOPATH/src/istio.io/istio/mixer/test/spyAdapter/template/template.gen.go
+//go:generate go run $REPO_ROOT/mixer/tools/codegen/cmd/mixgenbootstrap/main.go -f $REPO_ROOT/mixer/test/spyAdapter/template/inventory.yaml -o $REPO_ROOT/mixer/test/spyAdapter/template/template.gen.go
 
 // Package template contains generated code for the spy adapter testing. It
 // should *ONLY* be used for testing Mixer.

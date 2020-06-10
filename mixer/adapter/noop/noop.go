@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors.
+// Copyright Istio Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,9 +21,9 @@ import (
 	"context"
 	"time"
 
-	rpc "github.com/gogo/googleapis/google/rpc"
-	"github.com/gogo/protobuf/types"
+	rpc "istio.io/gogo-genproto/googleapis/google/rpc"
 
+	"istio.io/istio/mixer/adapter/metadata"
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/template/authorization"
 	"istio.io/istio/mixer/template/checknothing"
@@ -85,24 +85,9 @@ func (*handler) Close() error { return nil }
 
 // GetInfo returns the Info associated with this adapter implementation.
 func GetInfo() adapter.Info {
-	return adapter.Info{
-		Name:        "noop",
-		Impl:        "istio.io/istio/mixer/adapter/noop",
-		Description: "Does nothing (useful for testing)",
-		SupportedTemplates: []string{
-			authorization.TemplateName,
-			checknothing.TemplateName,
-			reportnothing.TemplateName,
-			listentry.TemplateName,
-			logentry.TemplateName,
-			metric.TemplateName,
-			quota.TemplateName,
-			tracespan.TemplateName,
-		},
-		DefaultConfig: &types.Empty{},
-
-		NewBuilder: func() adapter.HandlerBuilder { return &builder{} },
-	}
+	info := metadata.GetInfo("noop")
+	info.NewBuilder = func() adapter.HandlerBuilder { return &builder{} }
+	return info
 }
 
 type builder struct{}

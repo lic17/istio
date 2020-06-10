@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // nolint: lll
-//go:generate go run $GOPATH/src/istio.io/istio/mixer/tools/codegen/cmd/mixgeninventory/main.go -f $GOPATH/src/istio.io/istio/mixer/adapter/inventory.yaml -o $GOPATH/src/istio.io/istio/mixer/adapter/inventory.gen.go
+//go:generate go run $REPO_ROOT/mixer/tools/codegen/cmd/mixgeninventory/main.go -f $REPO_ROOT/mixer/adapter/inventory.yaml -o $REPO_ROOT/mixer/adapter/inventory.gen.go
 
 // Package adapter contains the inventory for all Mixer adapters that are compiled into
 // a specific Mixer binary.

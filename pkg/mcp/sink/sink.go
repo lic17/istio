@@ -1,4 +1,4 @@
-// Copyright 2019 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,13 +21,13 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/types"
-	"github.com/gogo/status"
 	"google.golang.org/grpc/codes"
 
 	mcp "istio.io/api/mcp/v1alpha1"
-	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/mcp/internal"
 	"istio.io/istio/pkg/mcp/monitoring"
+	"istio.io/istio/pkg/mcp/status"
+	"istio.io/pkg/log"
 )
 
 var scope = log.RegisterScope("mcp", "mcp debugging", 0)
@@ -54,7 +54,7 @@ type Sink struct {
 }
 
 // New creates a new resource sink.
-func New(options *Options) *Sink { // nolint: lll
+func New(options *Options) *Sink {
 	nodeInfo := &mcp.SinkNode{
 		Id:          options.ID,
 		Annotations: options.Metadata,
@@ -251,7 +251,7 @@ type Object struct {
 	Body     proto.Message
 }
 
-// changes is a collection of configuration objects of the same protobuf type.
+// Change is a collection of configuration objects of the same protobuf type.
 type Change struct {
 	Collection string
 
@@ -265,7 +265,7 @@ type Change struct {
 	Objects []*Object
 
 	// List of deleted resources by name. The resource name corresponds to the
-	// resource's metadata name.
+	// resource's metadata name (namespace/name).
 	//
 	// Ignore when Incremental=false.
 	Removed []string

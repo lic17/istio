@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -71,7 +71,7 @@ func TestClusterInfoCache_Workload_ReplicationController(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "default",
 				Name:      "test-pod",
-				OwnerReferences: []metav1.OwnerReference{metav1.OwnerReference{
+				OwnerReferences: []metav1.OwnerReference{{
 					Controller: &controller,
 					Kind:       "ReplicationController",
 					Name:       "test-rc",
@@ -83,7 +83,7 @@ func TestClusterInfoCache_Workload_ReplicationController(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "default",
 				Name:      "test-rc",
-				OwnerReferences: []metav1.OwnerReference{metav1.OwnerReference{
+				OwnerReferences: []metav1.OwnerReference{{
 					Controller: &controller,
 					Kind:       "DeploymentConfig",
 					Name:       "test-dc",

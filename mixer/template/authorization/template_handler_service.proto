@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,23 +24,25 @@ syntax = "proto3";
 // 
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: authorization
+// kind: instance
 // metadata:
 //   name: authinfo
 //   namespace: istio-system
 // spec:
-//  subject:
-//    user: source.user | request.auth.token[user] | ""
-//    groups: request.auth.token[groups]
-//    properties:
-//     iss: request.auth.token["iss"]
-//  action:
-//    namespace: destination.namespace | "default"
-//    service: destination.service | ""
-//    path: request.path | "/"
-//    method: request.method | "post"
-//    properties:
-//      version: destination.labels[version] | ""
+//   compiledTemplate: authorization
+//   params:
+//     subject:
+//       user: source.principal | request.auth.principal | ""
+//       groups: request.auth.claims["groups"] | ""
+//       properties:
+//         iss: request.auth.claims["iss"]
+//     action:
+//       namespace: destination.namespace | "default"
+//       service: destination.service.host | ""
+//       path: request.path | "/"
+//       method: request.method | "post"
+//       properties:
+//         version: destination.labels[version] | ""
 // ```
 //
 // The `authorization` template defines parameters for performing policy
@@ -66,6 +68,7 @@ option (istio.mixer.adapter.model.v1beta1.template_name) = "authorization";
 option (gogoproto.goproto_getters_all) = false;
 option (gogoproto.equal_all) = false;
 option (gogoproto.gostring_all) = false;
+option (gogoproto.stable_marshaler_all) = true;
 
 // HandleAuthorizationService is implemented by backends that wants to handle request-time 'authorization' instances.
 service HandleAuthorizationService {

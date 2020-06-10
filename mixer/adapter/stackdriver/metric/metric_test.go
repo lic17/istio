@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,7 +31,8 @@ import (
 
 	descriptor "istio.io/api/policy/v1beta1"
 	"istio.io/istio/mixer/adapter/stackdriver/config"
-	helper "istio.io/istio/mixer/adapter/stackdriver/helper"
+	"istio.io/istio/mixer/adapter/stackdriver/helper"
+	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/adapter/test"
 	metrict "istio.io/istio/mixer/template/metric"
 )
@@ -47,7 +48,7 @@ func (f *fakebuf) Record(in []*monitoringpb.TimeSeries) {
 func (*fakebuf) Close() error { return nil }
 
 var clientFunc = func(err error) createClientFunc {
-	return func(cfg *config.Params) (*monitoring.MetricClient, error) {
+	return func(cfg *config.Params, logger adapter.Logger) (*monitoring.MetricClient, error) {
 		return nil, err
 	}
 }
@@ -189,7 +190,7 @@ func TestRecord(t *testing.T) {
 	}
 	m := &metricpb.Metric{
 		Type:   "type",
-		Labels: map[string]string{"str": "str", "int": "34"},
+		Labels: map[string]string{"str": "str", "int": "34", "mesh_uid": "quite-a-mesh"},
 	}
 	info := map[string]info{
 		"gauge": {
@@ -390,7 +391,14 @@ func TestRecord(t *testing.T) {
 	for idx, tt := range tests {
 		t.Run(fmt.Sprintf("[%d] %s", idx, tt.name), func(t *testing.T) {
 			buf := &fakebuf{}
-			s := &handler{metricInfo: info, md: helper.Metadata{ProjectID: projectID}, client: buf, l: test.NewEnv(t).Logger(), now: func() time.Time { return now }}
+			s := &handler{
+				meshUID:    "quite-a-mesh",
+				metricInfo: info,
+				md:         helper.Metadata{ProjectID: projectID},
+				client:     buf,
+				l:          test.NewEnv(t).Logger(),
+				now:        func() time.Time { return now },
+			}
 			_ = s.HandleMetric(context.Background(), tt.vals)
 
 			if len(buf.buf) != len(tt.expected) {
@@ -411,7 +419,7 @@ func TestRecord(t *testing.T) {
 
 func TestProjectID(t *testing.T) {
 	createClientFn := func(pid string) createClientFunc {
-		return func(cfg *config.Params) (*monitoring.MetricClient, error) {
+		return func(cfg *config.Params, logger adapter.Logger) (*monitoring.MetricClient, error) {
 			if cfg.ProjectId != pid {
 				return nil, fmt.Errorf("wanted %v got %v", pid, cfg.ProjectId)
 			}
@@ -450,6 +458,49 @@ func TestProjectID(t *testing.T) {
 			_, err := b.Build(context.Background(), test.NewEnv(t))
 			if err != nil {
 				t.Errorf("Project id is not expected: %v", err)
+			}
+		})
+	}
+}
+
+func TestMeshUID(t *testing.T) {
+	createClientFn := func(meshUID string) createClientFunc {
+		return func(cfg *config.Params, logger adapter.Logger) (*monitoring.MetricClient, error) {
+			if cfg.MeshUid != meshUID {
+				return nil, fmt.Errorf("got %v; wanted %v", cfg.MeshUid, meshUID)
+			}
+			return nil, nil
+		}
+	}
+	tests := []struct {
+		name string
+		cfg  *config.Params
+		want string
+	}{
+		{
+			"empty mesh id",
+			&config.Params{
+				MeshUid: "",
+			},
+			"",
+		},
+		{
+			"mesh uid in config",
+			&config.Params{
+				MeshUid: "another-mesh",
+			},
+			"another-mesh",
+		},
+	}
+
+	for idx, tt := range tests {
+		t.Run(fmt.Sprintf("[%d] %s", idx, tt.name), func(t *testing.T) {
+			mg := helper.NewMetadataGenerator(dummyShouldFill, dummyMetadataFn, dummyMetadataFn, dummyMetadataFn)
+			b := &builder{createClient: createClientFn(tt.want), mg: mg}
+			b.SetAdapterConfig(tt.cfg)
+			_, err := b.Build(context.Background(), test.NewEnv(t))
+			if err != nil {
+				t.Errorf("Mesh UID is not expected: %v", err)
 			}
 		})
 	}

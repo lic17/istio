@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // nolint: lll
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -a mixer/adapter/prometheus/config/config.proto -x "-n prometheus -t metric"
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -a mixer/adapter/prometheus/config/config.proto -x "-n prometheus -t metric"
 
 // Package prometheus publishes metric values collected by Mixer for
 // ingestion by prometheus.
@@ -35,11 +35,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"istio.io/istio/mixer/adapter/metadata"
 	"istio.io/istio/mixer/adapter/prometheus/config"
 	"istio.io/istio/mixer/pkg/adapter"
-	"istio.io/istio/mixer/pkg/pool"
 	"istio.io/istio/mixer/template/metric"
-	"istio.io/istio/pkg/cache"
+	"istio.io/pkg/cache"
+	"istio.io/pkg/pool"
 )
 
 type (
@@ -91,16 +92,9 @@ func GetInfoWithAddr(addr string) (adapter.Info, Server) {
 		srv: newServer(addr),
 	}
 	singletonBuilder.clearState()
-	return adapter.Info{
-		Name:        "prometheus",
-		Impl:        "istio.io/istio/mixer/adapter/prometheus",
-		Description: "Publishes prometheus metrics",
-		SupportedTemplates: []string{
-			metric.TemplateName,
-		},
-		NewBuilder:    func() adapter.HandlerBuilder { return singletonBuilder },
-		DefaultConfig: &config.Params{},
-	}, singletonBuilder.srv
+	info := metadata.GetInfo("prometheus")
+	info.NewBuilder = func() adapter.HandlerBuilder { return singletonBuilder }
+	return info, singletonBuilder.srv
 }
 
 // GetInfo returns the Info associated with this adapter.
@@ -216,7 +210,7 @@ func (b *builder) Build(ctx context.Context, env adapter.Env) (adapter.Handler, 
 		ErrorLog:      &promLogger{logger: env.Logger()},
 	}
 
-	if err := b.srv.Start(env, promhttp.HandlerFor(b.registry, opts)); err != nil {
+	if err = b.srv.Start(env, promhttp.HandlerFor(b.registry, opts)); err != nil {
 		return nil, err
 	}
 
@@ -295,12 +289,12 @@ func key(name, kind string, labels prometheus.Labels, sortedLabelKeys []string) 
 		buf.WriteString(k + "=" + labels[k] + ";") // nolint: gas
 	}
 	h := fnv.New64()
-	buf.WriteTo(h)
+	_, _ = buf.WriteTo(h)
 	pool.PutBuffer(buf)
 	return h.Sum64()
 }
 
-func deleteOldMetrics(key, value interface{}) {
+func deleteOldMetrics(_, value interface{}) {
 	if entry, ok := value.(*cacheEntry); ok {
 		switch v := entry.vec.(type) {
 		case *prometheus.CounterVec:
@@ -445,5 +439,5 @@ type promLogger struct {
 }
 
 func (pl *promLogger) Println(v ...interface{}) {
-	pl.logger.Errorf("Prometheus handler error: %s", fmt.Sprintln(v...)) // nolint: gas
+	_ = pl.logger.Errorf("Prometheus handler error: %s", fmt.Sprintln(v...)) // nolint: gas
 }

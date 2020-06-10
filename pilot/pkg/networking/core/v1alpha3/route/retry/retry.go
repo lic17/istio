@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,18 +19,24 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
-	"github.com/gogo/protobuf/types"
+	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	"github.com/golang/protobuf/ptypes/wrappers"
+
+	previouspriorities "github.com/envoyproxy/go-control-plane/envoy/config/retry/previous_priorities"
 
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/networking/util"
 )
 
+var (
+	defaultRetryPriorityTypedConfig = util.MessageToAny(buildPreviousPrioritiesConfig())
+)
+
 // DefaultPolicy gets a copy of the default retry policy.
 func DefaultPolicy() *route.RetryPolicy {
 	policy := route.RetryPolicy{
-		NumRetries:           &types.UInt32Value{Value: 10},
-		RetryOn:              "connect-failure,refused-stream,unavailable,cancelled,resource-exhausted",
+		NumRetries:           &wrappers.UInt32Value{Value: 2},
+		RetryOn:              "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
 		RetriableStatusCodes: []uint32{http.StatusServiceUnavailable},
 		RetryHostPredicate: []*route.RetryPolicy_RetryHostPredicate{
 			{
@@ -39,7 +45,8 @@ func DefaultPolicy() *route.RetryPolicy {
 				Name: "envoy.retry_host_predicates.previous_hosts",
 			},
 		},
-		HostSelectionRetryMaxAttempts: 3,
+		// TODO: allow this to be configured via API.
+		HostSelectionRetryMaxAttempts: 5,
 	}
 	return &policy
 }
@@ -71,7 +78,7 @@ func ConvertPolicy(in *networking.HTTPRetry) *route.RetryPolicy {
 
 	// A policy was specified. Start with the default and override with user-provided fields where appropriate.
 	out := DefaultPolicy()
-	out.NumRetries = &types.UInt32Value{Value: uint32(in.GetAttempts())}
+	out.NumRetries = &wrappers.UInt32Value{Value: uint32(in.GetAttempts())}
 
 	if in.RetryOn != "" {
 		// Allow the incoming configuration to specify both Envoy RetryOn and RetriableStatusCodes. Any integers are
@@ -80,9 +87,18 @@ func ConvertPolicy(in *networking.HTTPRetry) *route.RetryPolicy {
 	}
 
 	if in.PerTryTimeout != nil {
-		d := util.GogoDurationToDuration(in.PerTryTimeout)
-		out.PerTryTimeout = &d
+		out.PerTryTimeout = util.GogoDurationToDuration(in.PerTryTimeout)
 	}
+
+	if in.RetryRemoteLocalities != nil && in.RetryRemoteLocalities.GetValue() {
+		out.RetryPriority = &route.RetryPolicy_RetryPriority{
+			Name: "envoy.retry_priorities.previous_priorities",
+			ConfigType: &route.RetryPolicy_RetryPriority_TypedConfig{
+				TypedConfig: defaultRetryPriorityTypedConfig,
+			},
+		}
+	}
+
 	return out
 }
 
@@ -108,4 +124,12 @@ func parseRetryOn(retryOn string) (string, []uint32) {
 	}
 
 	return strings.Join(tojoin, ","), codes
+}
+
+// buildPreviousPrioritiesConfig builds a PreviousPrioritiesConfig with a default
+// value for UpdateFrequency which indicated how often to update the priority.
+func buildPreviousPrioritiesConfig() *previouspriorities.PreviousPrioritiesConfig {
+	return &previouspriorities.PreviousPrioritiesConfig{
+		UpdateFrequency: int32(2),
+	}
 }

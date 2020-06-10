@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,34 +34,35 @@ const TemplateName = "edge"
 //
 // When writing the configuration, the value for the fields associated
 // with this template can either be a literal or an
-// [expression](https://istio.io/docs/reference/config/mixer/expression-language.html). Please
+// [expression](https://istio.io/docs/reference/config/policy-and-telemetry/expression-language/). Please
 // note that if the datatype of a field is not
 // istio.mixer.adapter.model.v1beta1.Value, then the expression's
-// [inferred
-// type](https://istio.io/docs/reference/config/policy-and-telemetry/expression-language/#type-checking)
+// [inferred type](https://istio.io/docs/reference/config/policy-and-telemetry/expression-language/#type-checking)
 // must match the datatype of the field.
 //
 // Example config:
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: edge
+// kind: instance
 // metadata:
 //   name: default
 //   namespace: istio-system
 // spec:
-//   timestamp: request.time
-//   sourceUid: source.uid | "Unknown"
-//   sourceOwner: source.owner | "Unknown"
-//   sourceWorkloadName: source.workload.name | "Unknown"
-//   sourceWorkloadNamespace: source.workload.namespace | "Unknown"
-//   destinationUid: destination.uid | "Unknown"
-//   destinationOwner: destination.owner | "Unknown"
-//   destinationWorkloadName: destination.workload.name | "Unknown"
-//   destinationWorkloadNamespace: destination.workload.namespace | "Unknown"
-//   destinationServiceName: destination.service.name | "Unknown"
-//   destinationServiceNamespace: destination.service.namespace | "Unknown"
-//   apiProtocol: api.protocol | "Unknown"
-//   contextProtocol: context.protocol | "Unknown"
+//   compiledTemplate: edge
+//   params:
+//     timestamp: request.time
+//     sourceUid: source.uid | "Unknown"
+//     sourceOwner: source.owner | "Unknown"
+//     sourceWorkloadName: source.workload.name | "Unknown"
+//     sourceWorkloadNamespace: source.workload.namespace | "Unknown"
+//     destinationUid: destination.uid | "Unknown"
+//     destinationOwner: destination.owner | "Unknown"
+//     destinationWorkloadName: destination.workload.name | "Unknown"
+//     destinationWorkloadNamespace: destination.workload.namespace | "Unknown"
+//     destinationServiceName: destination.service.name | "Unknown"
+//     destinationServiceNamespace: destination.service.namespace | "Unknown"
+//     apiProtocol: api.protocol | "Unknown"
+//     contextProtocol: context.protocol | "Unknown"
 // ```
 type Instance struct {
 	// Name of the instance as specified in configuration.

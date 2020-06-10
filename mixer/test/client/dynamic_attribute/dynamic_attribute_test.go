@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,17 +15,19 @@
 package client_test
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/endpoint"
+	core "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/api/v2/endpoint"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
-	"github.com/envoyproxy/go-control-plane/pkg/cache"
-	xds "github.com/envoyproxy/go-control-plane/pkg/server"
-	"github.com/gogo/protobuf/types"
+	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
+	"github.com/envoyproxy/go-control-plane/pkg/cache/v2"
+	xds "github.com/envoyproxy/go-control-plane/pkg/server/v2"
+	structpb "github.com/golang/protobuf/ptypes/struct"
 	"google.golang.org/grpc"
 
 	"istio.io/istio/mixer/test/client/env"
@@ -184,37 +186,37 @@ func TestDynamicAttribute(t *testing.T) {
 	}
 
 	snapshots := cache.NewSnapshotCache(false, hasher{}, nil)
-	snapshots.SetSnapshot("", cache.Snapshot{
-		Endpoints: cache.Resources{Version: "1", Items: map[string]cache.Resource{
-			"backend": &v2.ClusterLoadAssignment{
-				ClusterName: "backend",
-				Endpoints: []endpoint.LocalityLbEndpoints{{
-					LbEndpoints: []endpoint.LbEndpoint{{
-						Metadata: &core.Metadata{
-							FilterMetadata: map[string]*types.Struct{
-								"istio": {
-									Fields: map[string]*types.Value{
-										"uid": {Kind: &types.Value_StringValue{StringValue: "pod1.ns2"}},
-									},
+	snapshot := cache.Snapshot{}
+	snapshot.Resources[types.Endpoint] = cache.Resources{Version: "1", Items: map[string]types.Resource{
+		"backend": &v2.ClusterLoadAssignment{
+			ClusterName: "backend",
+			Endpoints: []*endpoint.LocalityLbEndpoints{{
+				LbEndpoints: []*endpoint.LbEndpoint{{
+					Metadata: &core.Metadata{
+						FilterMetadata: map[string]*structpb.Struct{
+							"istio": {
+								Fields: map[string]*structpb.Value{
+									"uid": {Kind: &structpb.Value_StringValue{StringValue: "pod1.ns2"}},
 								},
 							},
 						},
-						HostIdentifier: &endpoint.LbEndpoint_Endpoint{
-							Endpoint: &endpoint.Endpoint{
-								Address: &core.Address{Address: &core.Address_SocketAddress{
-									SocketAddress: &core.SocketAddress{
-										Address:       "127.0.0.1",
-										PortSpecifier: &core.SocketAddress_PortValue{PortValue: uint32(s.Ports().BackendPort)},
-									},
-								}},
-							},
+					},
+					HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+						Endpoint: &endpoint.Endpoint{
+							Address: &core.Address{Address: &core.Address_SocketAddress{
+								SocketAddress: &core.SocketAddress{
+									Address:       "127.0.0.1",
+									PortSpecifier: &core.SocketAddress_PortValue{PortValue: uint32(s.Ports().BackendPort)},
+								},
+							}},
 						},
-					}},
+					},
 				}},
-			},
-		}},
-	})
-	server := xds.NewServer(snapshots, nil)
+			}},
+		},
+	}}
+	snapshots.SetSnapshot("", snapshot)
+	server := xds.NewServer(context.Background(), snapshots, nil)
 	discovery.RegisterAggregatedDiscoveryServiceServer(grpcServer, server)
 
 	go func() {

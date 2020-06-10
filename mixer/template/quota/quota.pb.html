@@ -13,16 +13,18 @@ number_of_entries: 1
 <p>Example config:</p>
 
 <pre><code class="language-yaml">apiVersion: &quot;config.istio.io/v1alpha2&quot;
-kind: quota
+kind: instance
 metadata:
   name: requestcount
   namespace: istio-system
 spec:
-  dimensions:
-    source: source.labels[&quot;app&quot;] | source.service | &quot;unknown&quot;
-    sourceVersion: source.labels[&quot;version&quot;] | &quot;unknown&quot;
-    destination: destination.labels[&quot;app&quot;] | destination.service | &quot;unknown&quot;
-    destinationVersion: destination.labels[&quot;version&quot;] | &quot;unknown&quot;
+  compiledTemplate: quota
+  params:
+    dimensions:
+      source: source.name | &quot;unknown&quot;
+      sourceVersion: source.labels[&quot;version&quot;] | &quot;unknown&quot;
+      destination: destination.labels[&quot;app&quot;] | destination.service.host | &quot;unknown&quot;
+      destinationVersion: destination.labels[&quot;version&quot;] | &quot;unknown&quot;
 </code></pre>
 
 <h2 id="Template">Template</h2>
@@ -39,15 +41,19 @@ then the expression&rsquo;s <a href="https://istio.io/docs/reference//config/pol
 <th>Field</th>
 <th>Type</th>
 <th>Description</th>
+<th>Required</th>
 </tr>
 </thead>
 <tbody>
 <tr id="Template-dimensions">
 <td><code>dimensions</code></td>
-<td><code>map&lt;string,&nbsp;<a href="https://istio.io/docs/reference/config/policy-and-telemetry/istio.policy.v1beta1.html#Value">istio.policy.v1beta1.Value</a>&gt;</code></td>
+<td><code>map&lt;string,&nbsp;<a href="https://istio.io/docs/reference/config/policy-and-telemetry/istio.policy.v1beta1.html#Value">Value</a>&gt;</code></td>
 <td>
 <p>The unique identity of the particular quota to manipulate.</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 </tbody>

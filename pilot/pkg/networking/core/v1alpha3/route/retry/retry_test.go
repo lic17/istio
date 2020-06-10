@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,14 +15,20 @@
 package retry_test
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
-	protoTypes "github.com/gogo/protobuf/types"
+	gogoTypes "github.com/gogo/protobuf/types"
+	"github.com/golang/protobuf/ptypes"
 	. "github.com/onsi/gomega"
+
+	previouspriorities "github.com/envoyproxy/go-control-plane/envoy/config/retry/previous_priorities"
+	envoyroute "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/route/retry"
+	"istio.io/istio/pilot/pkg/networking/util"
 )
 
 func TestNilRetryShouldReturnDefault(t *testing.T) {
@@ -57,18 +63,16 @@ func TestRetryWithAllFieldsSet(t *testing.T) {
 	// Create a route with a retry policy with zero attempts configured.
 	route := networking.HTTPRoute{
 		Retries: &networking.HTTPRetry{
-			Attempts: 2,
-			RetryOn:  "some,fake,conditions",
-			PerTryTimeout: &protoTypes.Duration{
-				Seconds: 3,
-			},
+			Attempts:      2,
+			RetryOn:       "some,fake,conditions",
+			PerTryTimeout: gogoTypes.DurationProto(time.Second * 3),
 		},
 	}
 
 	policy := retry.ConvertPolicy(route.Retries)
 	g.Expect(policy).To(Not(BeNil()))
 	g.Expect(policy.RetryOn).To(Equal("some,fake,conditions"))
-	g.Expect(*policy.PerTryTimeout).To(Equal(time.Second * 3))
+	g.Expect(policy.PerTryTimeout).To(Equal(ptypes.DurationProto(time.Second * 3)))
 	g.Expect(policy.NumRetries.Value).To(Equal(uint32(2)))
 	g.Expect(policy.RetriableStatusCodes).To(Equal(make([]uint32, 0)))
 	g.Expect(policy.RetryPriority).To(BeNil())
@@ -175,4 +179,37 @@ func TestMissingPerTryTimeoutShouldReturnNil(t *testing.T) {
 	policy := retry.ConvertPolicy(route.Retries)
 	g.Expect(policy).To(Not(BeNil()))
 	g.Expect(policy.PerTryTimeout).To(BeNil())
+}
+
+func TestRetryRemoteLocalities(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	// Create a route with a retry policy with RetryRemoteLocalities enabled.
+	route := networking.HTTPRoute{
+		Retries: &networking.HTTPRetry{
+			Attempts: 2,
+			RetryRemoteLocalities: &gogoTypes.BoolValue{
+				Value: true,
+			},
+		},
+	}
+
+	policy := retry.ConvertPolicy(route.Retries)
+	g.Expect(policy).To(Not(BeNil()))
+	g.Expect(policy.RetryOn).To(Equal(retry.DefaultPolicy().RetryOn))
+	g.Expect(policy.RetriableStatusCodes).To(Equal(retry.DefaultPolicy().RetriableStatusCodes))
+
+	previousPrioritiesConfig := &previouspriorities.PreviousPrioritiesConfig{
+		UpdateFrequency: int32(2),
+	}
+	expected := &envoyroute.RetryPolicy_RetryPriority{
+		Name: "envoy.retry_priorities.previous_priorities",
+		ConfigType: &envoyroute.RetryPolicy_RetryPriority_TypedConfig{
+			TypedConfig: util.MessageToAny(previousPrioritiesConfig),
+		},
+	}
+
+	if !reflect.DeepEqual(policy.RetryPriority, expected) {
+		t.Fatalf("Expected %v, actual %v", expected, policy.RetryPriority)
+	}
 }

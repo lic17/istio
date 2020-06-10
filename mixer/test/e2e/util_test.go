@@ -1,4 +1,4 @@
-// Copyright 2016 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ import (
 	"istio.io/istio/mixer/pkg/server"
 	"istio.io/istio/mixer/pkg/template"
 	spyadapter "istio.io/istio/mixer/test/spyAdapter"
+	attr "istio.io/pkg/attribute"
 )
 
 type testData struct {
@@ -210,13 +211,13 @@ func closeHelper(c io.Closer) {
 }
 
 func getAttrBag(attrs map[string]interface{}) istio_mixer_v1.CompressedAttributes {
-	requestBag := attribute.GetMutableBag(nil)
+	requestBag := attr.GetMutableBag(nil)
 	for k, v := range attrs {
 		requestBag.Set(k, v)
 	}
 
 	var attrProto istio_mixer_v1.CompressedAttributes
-	requestBag.ToProto(&attrProto, nil, 0)
+	attribute.ToProto(requestBag, &attrProto, nil, 0)
 	return attrProto
 }
 

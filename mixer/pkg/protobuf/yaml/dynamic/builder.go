@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors.
+// Copyright Istio Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import (
 	"istio.io/istio/mixer/pkg/lang/compiled"
 	"istio.io/istio/mixer/pkg/protobuf/yaml"
 	"istio.io/istio/mixer/pkg/runtime/lang"
-	istiolog "istio.io/istio/pkg/log"
+	istiolog "istio.io/pkg/log"
 )
 
 var (
@@ -274,7 +274,7 @@ func (c Builder) buildPrimitiveField(v interface{}, fd *descriptor.FieldDescript
 		}
 
 		if err != nil {
-			return nil, fmt.Errorf("unable to build primitve encoder for:%v %v. %v", fld.name, val, err)
+			return nil, fmt.Errorf("unable to build primitive encoder for:%v %v. %v", fld.name, val, err)
 		}
 
 		// now enc != nil

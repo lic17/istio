@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@ import (
 	"io/ioutil"
 	"testing"
 
-	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/test/env"
+	"istio.io/istio/pkg/util/gogoprotomarshal"
 	"istio.io/istio/tests/util"
 )
 
@@ -42,7 +42,7 @@ func TestCDS(t *testing.T) {
 		return
 	}
 
-	strResponse, _ := model.ToJSONWithIndent(res, " ")
+	strResponse, _ := gogoprotomarshal.ToJSONWithIndent(res, " ")
 	_ = ioutil.WriteFile(env.IstioOut+"/cdsv2_sidecar.json", []byte(strResponse), 0644)
 
 	t.Log("CDS response", strResponse)

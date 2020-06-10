@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,19 +18,22 @@ import (
 	"testing"
 	"time"
 
-	xdsapi "github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/endpoint"
-	ads "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
-	proto "github.com/gogo/protobuf/types"
+	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	structpb "github.com/golang/protobuf/ptypes/struct"
 
 	meshconfig "istio.io/api/mesh/v1alpha1"
+
 	testenv "istio.io/istio/mixer/test/client/env"
 	"istio.io/istio/pilot/pkg/bootstrap"
 	"istio.io/istio/pilot/pkg/model"
 	v2 "istio.io/istio/pilot/pkg/proxy/envoy/v2"
+	v3 "istio.io/istio/pilot/pkg/proxy/envoy/v3"
 	"istio.io/istio/pilot/pkg/serviceregistry"
-	"istio.io/istio/pilot/pkg/serviceregistry/aggregate"
+	"istio.io/istio/pkg/config/host"
+	"istio.io/istio/pkg/config/mesh"
+	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/test/env"
 	"istio.io/istio/tests/util"
 )
@@ -38,8 +41,7 @@ import (
 // Testing the Split Horizon EDS.
 
 type expectedResults struct {
-	endpoints []string
-	weights   map[string]uint32
+	weights map[string]uint32
 }
 
 // The test will setup 3 networks with various number of endpoints for the same service within
@@ -62,8 +64,12 @@ func TestSplitHorizonEds(t *testing.T) {
 	// Network has 2 gateways
 	initRegistry(server, 3, []string{"159.122.219.3", "179.114.119.3"}, 3)
 	// Set up a cluster registry for network 4 with 4 instances for the service 'service5'
-	// but without any gateway
+	// but without any gateway, which is treated as accessible directly.
 	initRegistry(server, 4, []string{}, 4)
+
+	// Push contexts needs to be updated
+	server.EnvoyXdsServer.ConfigUpdate(&model.PushRequest{Full: true})
+	time.Sleep(time.Millisecond * 200) // give time for cache to clear
 
 	tests := []struct {
 		network   string
@@ -76,8 +82,16 @@ func TestSplitHorizonEds(t *testing.T) {
 			network:   "network1",
 			sidecarID: sidecarID("10.1.0.1", "app3"),
 			want: expectedResults{
-				endpoints: []string{"10.1.0.1", "159.122.219.2", "159.122.219.3", "179.114.119.3"},
-				weights:   map[string]uint32{"159.122.219.2": 2, "159.122.219.3": 3},
+				weights: map[string]uint32{
+					"10.1.0.1":      2,
+					"159.122.219.2": 4,
+					"159.122.219.3": 3,
+					"179.114.119.3": 3,
+					"10.4.0.1":      2,
+					"10.4.0.2":      2,
+					"10.4.0.3":      2,
+					"10.4.0.4":      2,
+				},
 			},
 		},
 		{
@@ -86,8 +100,17 @@ func TestSplitHorizonEds(t *testing.T) {
 			network:   "network2",
 			sidecarID: sidecarID("10.2.0.1", "app3"),
 			want: expectedResults{
-				endpoints: []string{"10.2.0.1", "10.2.0.2", "159.122.219.1", "159.122.219.3", "179.114.119.3"},
-				weights:   map[string]uint32{"159.122.219.1": 1, "159.122.219.3": 3, "179.114.119.3": 3},
+				weights: map[string]uint32{
+					"10.2.0.1":      2,
+					"10.2.0.2":      2,
+					"159.122.219.1": 2,
+					"159.122.219.3": 3,
+					"179.114.119.3": 3,
+					"10.4.0.1":      2,
+					"10.4.0.2":      2,
+					"10.4.0.3":      2,
+					"10.4.0.4":      2,
+				},
 			},
 		},
 		{
@@ -96,8 +119,17 @@ func TestSplitHorizonEds(t *testing.T) {
 			network:   "network3",
 			sidecarID: sidecarID("10.3.0.1", "app3"),
 			want: expectedResults{
-				endpoints: []string{"10.3.0.1", "10.3.0.2", "10.3.0.3", "159.122.219.1", "159.122.219.2"},
-				weights:   map[string]uint32{"159.122.219.1": 1, "159.122.219.2": 2},
+				weights: map[string]uint32{
+					"159.122.219.1": 2,
+					"159.122.219.2": 4,
+					"10.3.0.1":      2,
+					"10.3.0.2":      2,
+					"10.3.0.3":      2,
+					"10.4.0.1":      2,
+					"10.4.0.2":      2,
+					"10.4.0.3":      2,
+					"10.4.0.4":      2,
+				},
 			},
 		},
 		{
@@ -106,8 +138,16 @@ func TestSplitHorizonEds(t *testing.T) {
 			network:   "network4",
 			sidecarID: sidecarID("10.4.0.1", "app3"),
 			want: expectedResults{
-				endpoints: []string{"10.4.0.1", "10.4.0.2", "10.4.0.3", "10.4.0.4", "159.122.219.1", "159.122.219.2", "159.122.219.3", "179.114.119.3"},
-				weights:   map[string]uint32{"159.122.219.1": 1, "159.122.219.2": 2, "159.122.219.3": 3, "179.114.119.3": 3},
+				weights: map[string]uint32{
+					"10.4.0.1":      2,
+					"10.4.0.2":      2,
+					"10.4.0.3":      2,
+					"10.4.0.4":      2,
+					"159.122.219.1": 2,
+					"159.122.219.2": 4,
+					"159.122.219.3": 3,
+					"179.114.119.3": 3,
+				},
 			},
 		},
 	}
@@ -121,22 +161,22 @@ func TestSplitHorizonEds(t *testing.T) {
 // Tests whether an EDS response from the provided network matches the expected results
 func verifySplitHorizonResponse(t *testing.T, network string, sidecarID string, expected expectedResults) {
 	t.Helper()
-	edsstr, cancel, err := connectADS(util.MockPilotGrpcAddr)
+	edsstr, cancel, err := connectADSV3(util.MockPilotGrpcAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cancel()
 
-	metadata := &proto.Struct{Fields: map[string]*proto.Value{
-		"ISTIO_PROXY_VERSION": {Kind: &proto.Value_StringValue{StringValue: "1.1"}},
-		"NETWORK":             {Kind: &proto.Value_StringValue{StringValue: network}},
+	metadata := &structpb.Struct{Fields: map[string]*structpb.Value{
+		"ISTIO_VERSION": {Kind: &structpb.Value_StringValue{StringValue: "1.3"}},
+		"NETWORK":       {Kind: &structpb.Value_StringValue{StringValue: network}},
 	}}
 
 	err = sendCDSReqWithMetadata(sidecarID, metadata, edsstr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = adsReceive(edsstr, 5*time.Second)
+	_, err = adsReceiveV3(edsstr, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +185,7 @@ func verifySplitHorizonResponse(t *testing.T, network string, sidecarID string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := adsReceive(edsstr, 5*time.Second)
+	res, err := adsReceiveV3(edsstr, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,15 +200,15 @@ func verifySplitHorizonResponse(t *testing.T, network string, sidecarID string, 
 	}
 
 	lbEndpoints := eps[0].LbEndpoints
-	if len(lbEndpoints) != len(expected.endpoints) {
-		t.Fatal(fmt.Errorf("number of endpoints should be %d but got %d", len(expected.endpoints), len(lbEndpoints)))
+	if len(lbEndpoints) != len(expected.weights) {
+		t.Fatal(fmt.Errorf("number of endpoints should be %d but got %d", len(expected.weights), len(lbEndpoints)))
 	}
 
 	for addr, weight := range expected.weights {
 		var match *endpoint.LbEndpoint
 		for _, ep := range lbEndpoints {
 			if ep.GetEndpoint().Address.GetSocketAddress().Address == addr {
-				match = &ep
+				match = ep
 				break
 			}
 		}
@@ -201,21 +241,23 @@ func initSplitHorizonTestEnv(t *testing.T) (*bootstrap.Server, util.TearDownFunc
 func initRegistry(server *bootstrap.Server, clusterNum int, gatewaysIP []string, numOfEndpoints int) {
 	id := fmt.Sprintf("network%d", clusterNum)
 	memRegistry := v2.NewMemServiceDiscovery(
-		map[model.Hostname]*model.Service{}, 2)
-	server.ServiceController.AddRegistry(aggregate.Registry{
+		map[host.Name]*model.Service{}, 2)
+	memRegistry.EDSUpdater = server.EnvoyXdsServer
+
+	server.ServiceController().AddRegistry(serviceregistry.Simple{
 		ClusterID:        id,
-		Name:             serviceregistry.ServiceRegistry("memAdapter"),
+		ProviderID:       serviceregistry.Mock,
 		ServiceDiscovery: memRegistry,
 		Controller:       &v2.MemServiceController{},
 	})
 
-	gws := []*meshconfig.Network_IstioNetworkGateway{}
+	gws := make([]*meshconfig.Network_IstioNetworkGateway, 0)
 	for _, gatewayIP := range gatewaysIP {
 		if gatewayIP != "" {
-			if server.EnvoyXdsServer.Env.MeshNetworks == nil {
-				server.EnvoyXdsServer.Env.MeshNetworks = &meshconfig.MeshNetworks{
+			if server.EnvoyXdsServer.Env.Networks() == nil {
+				server.EnvoyXdsServer.Env.NetworksWatcher = mesh.NewFixedNetworksWatcher(&meshconfig.MeshNetworks{
 					Networks: map[string]*meshconfig.Network{},
-				}
+				})
 			}
 			gw := &meshconfig.Network_IstioNetworkGateway{
 				Gw: &meshconfig.Network_IstioNetworkGateway_Address{
@@ -228,7 +270,7 @@ func initRegistry(server *bootstrap.Server, clusterNum int, gatewaysIP []string,
 	}
 
 	if len(gws) != 0 {
-		server.EnvoyXdsServer.Env.MeshNetworks.Networks[id] = &meshconfig.Network{
+		server.EnvoyXdsServer.Env.Networks().Networks[id] = &meshconfig.Network{
 			Gateways: gws,
 		}
 	}
@@ -242,35 +284,39 @@ func initRegistry(server *bootstrap.Server, clusterNum int, gatewaysIP []string,
 	memRegistry.AddService("service5.default.svc.cluster.local", &model.Service{
 		Hostname: "service5.default.svc.cluster.local",
 		Address:  "10.10.0.1",
-		Ports:    testPorts(0),
-	})
-	for i := 0; i < numOfEndpoints; i++ {
-		memRegistry.AddInstance("service5.default.svc.cluster.local", &model.ServiceInstance{
-			Endpoint: model.NetworkEndpoint{
-				Address: fmt.Sprintf("10.%d.0.%d", clusterNum, i+1),
-				Port:    2080,
-				ServicePort: &model.Port{
-					Name:     "http-main",
-					Port:     1080,
-					Protocol: model.ProtocolHTTP,
-				},
-				Network:  id,
-				Locality: "az",
-				UID:      "kubernetes://dummy",
+		Ports: []*model.Port{
+			{
+				Name:     "http-main",
+				Port:     1080,
+				Protocol: protocol.HTTP,
 			},
+		},
+	})
+	istioEndpoints := make([]*model.IstioEndpoint, numOfEndpoints)
+	for i := 0; i < numOfEndpoints; i++ {
+		istioEndpoints[i] = &model.IstioEndpoint{
+			Address:         fmt.Sprintf("10.%d.0.%d", clusterNum, i+1),
+			EndpointPort:    2080,
+			ServicePortName: "http-main",
+			Network:         id,
+			Locality: model.Locality{
+				Label: "az",
+			},
+			UID:    "kubernetes://dummy",
 			Labels: svcLabels,
-		})
+		}
 	}
+	memRegistry.SetEndpoints("service5.default.svc.cluster.local", "default", istioEndpoints)
 }
 
-func sendCDSReqWithMetadata(node string, metadata *proto.Struct, edsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
-	err := edsstr.Send(&xdsapi.DiscoveryRequest{
+func sendCDSReqWithMetadata(node string, metadata *structpb.Struct, edsstr discovery.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
+	err := edsstr.Send(&discovery.DiscoveryRequest{
 		ResponseNonce: time.Now().String(),
 		Node: &core.Node{
 			Id:       node,
 			Metadata: metadata,
 		},
-		TypeUrl: v2.ClusterType})
+		TypeUrl: v3.ClusterType})
 	if err != nil {
 		return fmt.Errorf("CDS request failed: %s", err)
 	}
@@ -278,15 +324,15 @@ func sendCDSReqWithMetadata(node string, metadata *proto.Struct, edsstr ads.Aggr
 	return nil
 }
 
-func sendEDSReqWithMetadata(clusters []string, node string, metadata *proto.Struct,
-	edsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
-	err := edsstr.Send(&xdsapi.DiscoveryRequest{
+func sendEDSReqWithMetadata(clusters []string, node string, metadata *structpb.Struct,
+	edsstr discovery.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
+	err := edsstr.Send(&discovery.DiscoveryRequest{
 		ResponseNonce: time.Now().String(),
 		Node: &core.Node{
 			Id:       node,
 			Metadata: metadata,
 		},
-		TypeUrl:       v2.EndpointType,
+		TypeUrl:       v3.EndpointType,
 		ResourceNames: clusters,
 	})
 	if err != nil {

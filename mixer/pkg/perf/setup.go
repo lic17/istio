@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -55,12 +55,12 @@ type Setup struct {
 	Loads []Load `json:"loads"`
 }
 
-// marshallLoad converts a load object into YAML serialized form.
-func marshallLoad(load *Load) ([]byte, error) {
+// marshalLoad converts a load object into YAML serialized form.
+func marshalLoad(load *Load) ([]byte, error) {
 	return yaml.Marshal(load)
 }
 
-// unmarshallLoad reads a Load object from a YAML serialized form.
-func unmarshallLoad(bytes []byte, load *Load) error {
+// unmarshalLoad reads a Load object from a YAML serialized form.
+func unmarshalLoad(bytes []byte, load *Load) error {
 	return yaml.Unmarshal(bytes, load)
 }

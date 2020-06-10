@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,9 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/types"
-	"github.com/gogo/status"
 	"google.golang.org/grpc/codes"
+
+	"istio.io/istio/pkg/mcp/status"
 
 	mcp "istio.io/api/mcp/v1alpha1"
 )
@@ -164,7 +165,6 @@ var (
 func init() {
 	proto.RegisterType((*FakeType0)(nil), FakeType0MessageName)
 	proto.RegisterType((*FakeType1)(nil), FakeType1MessageName)
-	proto.RegisterType((*FakeType2)(nil), FakeType2MessageName)
 	proto.RegisterType((*FakeType2)(nil), FakeType2MessageName)
 	proto.RegisterType((*UnmarshalErrorType)(nil), UnmarshalErrorMessageName)
 

@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,17 +22,22 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"time"
 
-	"istio.io/istio/pkg/log"
 	"istio.io/istio/security/pkg/nodeagent/plugin"
+	"istio.io/pkg/env"
+	"istio.io/pkg/log"
 )
 
 var (
-	secureTokenEndpoint = "https://securetoken.googleapis.com/v1/identitybindingtoken"
-	tlsFlag             = true
+	// GKEClusterURL is the URL to send requests to the token exchange service.
+	GKEClusterURL = env.RegisterStringVar("GKE_CLUSTER_URL", "", "The url of GKE cluster").Get()
+	// SecureTokenEndpoint is the Endpoint the STS client calls to.
+	SecureTokenEndpoint = "https://securetoken.googleapis.com/v1/identitybindingtoken"
+	stsClientLog        = log.RegisterScope("stsclient", "STS client debugging", 0)
 )
 
 const (
@@ -55,26 +60,18 @@ type Plugin struct {
 
 // NewPlugin returns an instance of secure token service client plugin
 func NewPlugin() plugin.Plugin {
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true,
+	caCertPool, err := x509.SystemCertPool()
+	if err != nil {
+		stsClientLog.Errorf("Failed to get SystemCertPool: %v", err)
+		return nil
 	}
-
-	if tlsFlag {
-		caCertPool, err := x509.SystemCertPool()
-		if err != nil {
-			log.Errorf("Failed to get SystemCertPool: %v", err)
-			return nil
-		}
-		tlsCfg = &tls.Config{
-			RootCAs: caCertPool,
-		}
-	}
-
 	return Plugin{
 		hTTPClient: &http.Client{
 			Timeout: httpTimeOutInSec * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: tlsCfg,
+				TLSClientConfig: &tls.Config{
+					RootCAs: caCertPool,
+				},
 			},
 		},
 	}
@@ -82,26 +79,49 @@ func NewPlugin() plugin.Plugin {
 
 // ExchangeToken exchange oauth access token from trusted domain and k8s sa jwt.
 func (p Plugin) ExchangeToken(ctx context.Context, trustDomain, k8sSAjwt string) (
-	string /*access token*/, time.Time /*expireTime*/, error) {
-	var jsonStr = constructFederatedTokenRequest(trustDomain, k8sSAjwt)
-	req, _ := http.NewRequest("POST", secureTokenEndpoint, bytes.NewBuffer(jsonStr))
+	string /*access token*/, time.Time /*expireTime*/, int /*httpRespCode*/, error) {
+	aud := constructAudience(trustDomain)
+	var jsonStr = constructFederatedTokenRequest(aud, k8sSAjwt)
+	req, _ := http.NewRequest("POST", SecureTokenEndpoint, bytes.NewBuffer(jsonStr))
 	req.Header.Set("Content-Type", contentType)
 
 	resp, err := p.hTTPClient.Do(req)
-	if err != nil {
-		log.Errorf("Failed to call getfederatedtoken: %v", err)
-		return "", time.Now(), errors.New("failed to exchange token")
+	errMsg := "failed to call token exchange service. "
+	if err != nil || resp == nil {
+		statusCode := http.StatusServiceUnavailable
+		// If resp is not null, return the actually status code returned from the token service.
+		// If resp is null, return a service unavailable status and try again.
+		if resp != nil {
+			statusCode = resp.StatusCode
+			errMsg += fmt.Sprintf("HTTP status: %s. Error: %v", resp.Status, err)
+		} else {
+			errMsg += fmt.Sprintf("HTTP response empty. Error: %v", err)
+		}
+		return "", time.Now(), statusCode, errors.New(errMsg)
 	}
 	defer resp.Body.Close()
 
 	body, _ := ioutil.ReadAll(resp.Body)
 	respData := &federatedTokenResponse{}
 	if err := json.Unmarshal(body, respData); err != nil {
-		log.Errorf("Failed to unmarshal response data: %v", err)
-		return "", time.Now(), errors.New("failed to exchange token")
+		return "", time.Now(), resp.StatusCode, fmt.Errorf(
+			"failed to unmarshal response data. HTTP status: %s. Error: %v. Body size: %d", resp.Status, err, len(body))
 	}
 
-	return respData.AccessToken, time.Now().Add(time.Second * time.Duration(respData.ExpiresIn)), nil
+	if respData.AccessToken == "" {
+		return "", time.Now(), resp.StatusCode, fmt.Errorf(
+			"exchanged empty token. HTTP status: %s. Response: %v", resp.Status, string(body))
+	}
+
+	return respData.AccessToken, time.Now().Add(time.Second * time.Duration(respData.ExpiresIn)), resp.StatusCode, nil
+}
+
+func constructAudience(trustDomain string) string {
+	if GKEClusterURL == "" {
+		return trustDomain
+	}
+
+	return fmt.Sprintf("identitynamespace:%s:%s", trustDomain, GKEClusterURL)
 }
 
 func constructFederatedTokenRequest(aud, jwt string) []byte {

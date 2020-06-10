@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,19 +24,20 @@ syntax = "proto3";
 // 
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: metric
+// kind: instance
 // metadata:
 //   name: requestsize
 //   namespace: istio-system
 // spec:
-//   value: request.size | 0
-//   dimensions:
-//     source_service: source.service | "unknown"
-//     source_version: source.labels["version"] | "unknown"
-//     destination_service: destination.service | "unknown"
-//     destination_version: destination.labels["version"] | "unknown"
-//     response_code: response.code | 200
-//   monitored_resource_type: '"UNSPECIFIED"'
+//   compiledTemplate: metric
+//   params:
+//     value: request.size | 0
+//     dimensions:
+//       source_version: source.labels["version"] | "unknown"
+//       destination_service: destination.service.host | "unknown"
+//       destination_version: destination.labels["version"] | "unknown"
+//       response_code: response.code | 200
+//     monitored_resource_type: '"UNSPECIFIED"'
 // ```
 //
 // The `metric` template represents a single piece of data to report.
@@ -60,6 +61,7 @@ option (istio.mixer.adapter.model.v1beta1.template_name) = "metric";
 option (gogoproto.goproto_getters_all) = false;
 option (gogoproto.equal_all) = false;
 option (gogoproto.gostring_all) = false;
+option (gogoproto.stable_marshaler_all) = true;
 
 // HandleMetricService is implemented by backends that wants to handle request-time 'metric' instances.
 service HandleMetricService {

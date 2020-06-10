@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,11 +82,16 @@ func batchTimeSeries(series []*monitoringpb.TimeSeries, tsLimit int) [][]*monito
 	return batches
 }
 
-func (b *buffered) start(env adapter.Env, ticker *time.Ticker) {
+func (b *buffered) start(env adapter.Env, ticker *time.Ticker, quit chan struct{}) {
 	env.ScheduleDaemon(func() {
-		for range ticker.C {
-			b.mergeTimeSeries()
-			b.Send()
+		for {
+			select {
+			case <-ticker.C:
+				b.mergeTimeSeries()
+				b.Send()
+			case <-quit:
+				return
+			}
 		}
 	})
 }
@@ -159,9 +165,15 @@ func (b *buffered) Send() {
 		// We need to build framework level support for these kinds of async tasks. Perhaps a generic batching adapter
 		// can handle some of this complexity?
 		if err != nil {
-			ets := handleError(err, timeSeries)
-			b.updateRetryBuffer(ets)
-			_ = b.l.Errorf("Stackdriver returned: %v\nGiven data: %v", err, timeSeries)
+			if isRetryable(status.Code(err)) {
+				b.updateRetryBuffer(timeSeries)
+			}
+			b.l.Errorf("%d time series was sent and Stackdriver returned: %v\n", len(timeSeries), err) // nolint: errcheck
+			if isOutOfOrderError(err) {
+				b.l.Debugf("Given data: %v", timeSeries)
+			} else {
+				b.l.Errorf("Given data: %v", timeSeries) // nolint: errcheck
+			}
 		} else {
 			b.l.Debugf("Successfully sent data to Stackdriver.")
 		}
@@ -177,33 +189,6 @@ func (b *buffered) Close() error {
 	b.l.Infof("Sending last data before shutting down")
 	b.Send()
 	return b.closeMe.Close()
-}
-
-// handleError extract out timeseries that fails to create from response status.
-// If no sepecific timeseries listed in error response, retry all time series in batch.
-func handleError(err error, tsSent []*monitoringpb.TimeSeries) []*monitoringpb.TimeSeries {
-	errorTS := make([]*monitoringpb.TimeSeries, 0, 0)
-	retryAll := true
-	s, ok := status.FromError(err)
-	if !ok {
-		return errorTS
-	}
-	sd := s.Details()
-	for _, i := range sd {
-		if t, ok := i.(*monitoringpb.CreateTimeSeriesError); ok {
-			retryAll = false
-			if !isRetryable(codes.Code(t.GetStatus().Code)) {
-				continue
-			}
-			errorTS = append(errorTS, t.GetTimeSeries())
-		}
-	}
-	if isRetryable(status.Code(err)) && retryAll {
-		for _, ts := range tsSent {
-			errorTS = append(errorTS, ts)
-		}
-	}
-	return errorTS
 }
 
 func (b *buffered) updateRetryBuffer(errorTS []*monitoringpb.TimeSeries) {
@@ -230,8 +215,17 @@ func (b *buffered) updateRetryBuffer(errorTS []*monitoringpb.TimeSeries) {
 
 func isRetryable(c codes.Code) bool {
 	switch c {
-	case codes.Canceled, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Aborted, codes.Internal, codes.Unavailable:
+	case codes.DeadlineExceeded, codes.Unavailable:
 		return true
+	}
+	return false
+}
+
+func isOutOfOrderError(err error) bool {
+	if s, ok := status.FromError(err); ok {
+		if strings.Contains(strings.ToLower(s.Message()), "order") {
+			return true
+		}
 	}
 	return false
 }

@@ -1,4 +1,4 @@
-//  Copyright 2019 Istio Authors
+//  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -40,7 +40,6 @@ import (
 	"google.golang.org/grpc/grpclog"
 
 	mcp "istio.io/api/mcp/v1alpha1"
-	"istio.io/istio/pkg/log"
 	mcprate "istio.io/istio/pkg/mcp/rate"
 	"istio.io/istio/pkg/mcp/server"
 	"istio.io/istio/pkg/mcp/sink"
@@ -48,6 +47,7 @@ import (
 	"istio.io/istio/pkg/mcp/source"
 	"istio.io/istio/pkg/mcp/testing/groups"
 	"istio.io/istio/pkg/mcp/testing/monitoring"
+	"istio.io/pkg/log"
 )
 
 var (
@@ -371,10 +371,6 @@ func (d *driver) initServer() error {
 	d.listener = l
 
 	d.serverAddress = l.Addr().String()
-	if err != nil {
-		_ = l.Close()
-		return err
-	}
 
 	d.grpcServer = grpc.NewServer()
 	mcp.RegisterResourceSourceServer(d.grpcServer, s)

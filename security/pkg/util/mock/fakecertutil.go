@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ type FakeCertUtil struct {
 }
 
 // GetWaitTime returns duration if err is nil, otherwise, it returns err.
-func (f FakeCertUtil) GetWaitTime(certBytes []byte, now time.Time) (time.Duration, error) {
+func (f FakeCertUtil) GetWaitTime(certBytes []byte, now time.Time, minGracePeriod time.Duration) (time.Duration, error) {
 	if f.Err != nil {
 		return time.Duration(0), f.Err
 	}

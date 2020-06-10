@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,22 +30,23 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 
 	"istio.io/api/policy/v1beta1"
-	"istio.io/istio/mixer/pkg/attribute"
 	ilt "istio.io/istio/mixer/pkg/il/testing"
-	"istio.io/istio/mixer/pkg/lang/ast"
+	"istio.io/istio/mixer/pkg/lang/compiled"
+	"istio.io/pkg/attribute"
 )
 
-func compatTest(test ilt.TestInfo) func(t *testing.T) {
+func compatTest(test ilt.TestInfo, mutex sync.Locker) func(t *testing.T) {
 	return func(t *testing.T) {
 		t.Parallel()
 
-		finder := ast.NewFinder(test.Conf())
+		finder := attribute.NewFinder(test.Conf())
 		builder := NewBuilder(finder, LegacySyntaxCEL)
+		mutex.Lock()
 		ex, typ, err := builder.Compile(test.E)
+		mutex.Unlock()
 
 		if err != nil {
 			if test.CompileErr != "" {
-				t.Logf("expected compile error %q, got %v", test.CompileErr, err)
 				return
 			}
 			t.Fatalf("unexpected compile error %v for %s", err, ex)
@@ -53,7 +55,6 @@ func compatTest(test ilt.TestInfo) func(t *testing.T) {
 		// timestamp(2) is not a compile error in CEL
 		// division is also supported by CEL
 		if test.CompileErr != "" {
-			t.Logf("expected compile error %q", test.CompileErr)
 			return
 		}
 
@@ -66,12 +67,10 @@ func compatTest(test ilt.TestInfo) func(t *testing.T) {
 		out, err := ex.Evaluate(b)
 		if err != nil {
 			if test.Err != "" {
-				t.Logf("expected evaluation error %q, got %v", test.Err, err)
 				return
 			}
 			if test.CEL != nil {
 				if expectedErr, ok := test.CEL.(error); ok && strings.Contains(err.Error(), expectedErr.Error()) {
-					t.Logf("expected evaluation error (override) %q, got %v", expectedErr, err)
 					return
 				}
 			}
@@ -101,12 +100,15 @@ func compatTest(test ilt.TestInfo) func(t *testing.T) {
 }
 
 func TestCEXLCompatibility(t *testing.T) {
+	//TODO remove the mutex once CEL data race is fixed
+	//ref: https://github.com/google/cel-go/issues/175
+	mutex := &sync.Mutex{}
 	for _, test := range ilt.TestData {
 		if test.E == "" {
 			continue
 		}
 
-		t.Run(test.TestName(), compatTest(test))
+		t.Run(test.TestName(), compatTest(test, mutex))
 	}
 }
 
@@ -116,7 +118,7 @@ func BenchmarkInterpreter(b *testing.B) {
 			continue
 		}
 
-		finder := ast.NewFinder(test.Conf())
+		finder := attribute.NewFinder(test.Conf())
 		builder := NewBuilder(finder, LegacySyntaxCEL)
 		ex, _, _ := builder.Compile(test.E)
 		bg := ilt.NewFakeBag(test.I)
@@ -126,6 +128,93 @@ func BenchmarkInterpreter(b *testing.B) {
 				_, _ = ex.Evaluate(bg)
 			}
 		})
+	}
+}
+
+var accessLog = map[string]string{
+	"connectionEvent":        `connection.event | ""`,
+	"sourceIp":               `source.ip | ip("0.0.0.0")`,
+	"sourceApp":              `source.labels["app"] | ""`,
+	"sourcePrincipal":        `source.principal | ""`,
+	"sourceName":             `source.name | ""`,
+	"sourceWorkload":         `source.workload.name | ""`,
+	"sourceNamespace":        `source.namespace | ""`,
+	"sourceOwner":            `source.owner | ""`,
+	"destinationApp":         `destination.labels["app"] | ""`,
+	"destinationIp":          `destination.ip | ip("0.0.0.0")`,
+	"destinationServiceHost": `destination.service.host | ""`,
+	"destinationWorkload":    `destination.workload.name | ""`,
+	"destinationName":        `destination.name | ""`,
+	"destinationNamespace":   `destination.namespace | ""`,
+	"destinationOwner":       `destination.owner | ""`,
+	"destinationPrincipal":   `destination.principal | ""`,
+	"protocol":               `context.protocol | "tcp"`,
+	"connectionDuration":     `connection.duration | "0ms"`,
+	// nolint: lll
+	"connection_security_policy": `conditional((context.reporter.kind | "inbound") == "outbound", "unknown", conditional(connection.mtls | false, "mutual_tls", "none"))`,
+	"requestedServerName":        `connection.requested_server_name | ""`,
+	"receivedBytes":              `connection.received.bytes | 0`,
+	"sentBytes":                  `connection.sent.bytes | 0`,
+	"totalReceivedBytes":         `connection.received.bytes_total | 0`,
+	"totalSentBytes":             `connection.sent.bytes_total | 0`,
+	"reporter":                   `conditional((context.reporter.kind | "inbound") == "outbound", "source", "destination")`,
+	"responseFlags":              `context.proxy_error_code | ""`,
+}
+
+var attributes = map[string]*v1beta1.AttributeManifest_AttributeInfo{
+	"connection.event":                 {ValueType: v1beta1.STRING},
+	"source.ip":                        {ValueType: v1beta1.IP_ADDRESS},
+	"source.labels":                    {ValueType: v1beta1.STRING_MAP},
+	"source.principal":                 {ValueType: v1beta1.STRING},
+	"source.name":                      {ValueType: v1beta1.STRING},
+	"source.workload.name":             {ValueType: v1beta1.STRING},
+	"source.namespace":                 {ValueType: v1beta1.STRING},
+	"source.owner":                     {ValueType: v1beta1.STRING},
+	"destination.ip":                   {ValueType: v1beta1.IP_ADDRESS},
+	"destination.labels":               {ValueType: v1beta1.STRING_MAP},
+	"destination.principal":            {ValueType: v1beta1.STRING},
+	"destination.name":                 {ValueType: v1beta1.STRING},
+	"destination.workload.name":        {ValueType: v1beta1.STRING},
+	"destination.namespace":            {ValueType: v1beta1.STRING},
+	"destination.owner":                {ValueType: v1beta1.STRING},
+	"destination.service.host":         {ValueType: v1beta1.STRING},
+	"context.protocol":                 {ValueType: v1beta1.STRING},
+	"connection.duration":              {ValueType: v1beta1.DURATION},
+	"context.reporter.kind":            {ValueType: v1beta1.STRING},
+	"context.proxy_error_code":         {ValueType: v1beta1.STRING},
+	"connection.mtls":                  {ValueType: v1beta1.BOOL},
+	"connection.requested_server_name": {ValueType: v1beta1.STRING},
+	"connection.received.bytes":        {ValueType: v1beta1.INT64},
+	"connection.sent.bytes":            {ValueType: v1beta1.INT64},
+	"connection.received.bytes_total":  {ValueType: v1beta1.INT64},
+	"connection.sent.bytes_total":      {ValueType: v1beta1.INT64},
+}
+
+func BenchmarkAccessLogCEL(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		finder := attribute.NewFinder(attributes)
+		builder := NewBuilder(finder, LegacySyntaxCEL)
+		for _, expr := range accessLog {
+			_, _, err := builder.Compile(expr)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkAccessLogCEXL(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		finder := attribute.NewFinder(attributes)
+		builder := compiled.NewBuilder(finder)
+		for _, expr := range accessLog {
+			_, _, err := builder.Compile(expr)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
 	}
 }
 
@@ -178,15 +267,15 @@ var (
 			referenced: []string{"context.reporter.kind"},
 		},
 		{
-			text:       `as`,
+			text:       `abc`,
 			result:     "",
-			referenced: []string{"-as"},
+			referenced: []string{"-abc"},
 		},
 		{
-			text:       `as`,
-			bag:        map[string]interface{}{"as": "test"},
+			text:       `abc`,
+			bag:        map[string]interface{}{"abc": "test"},
 			result:     "test",
-			referenced: []string{"as"},
+			referenced: []string{"abc"},
 		},
 		{
 			text:       `context.reporter.kind`,
@@ -274,7 +363,7 @@ var (
 			text: `request.time > context.time`,
 			bag: map[string]interface{}{
 				"request.time": time.Date(1999, time.December, 31, 23, 59, 0, 0, time.UTC),
-				"context.time": time.Date(1977, time.February, 4, 12, 00, 0, 0, time.UTC),
+				"context.time": time.Date(1977, time.February, 4, 12, 0, 0, 0, time.UTC),
 			},
 			result:     true,
 			referenced: []string{"context.time", "request.time"},
@@ -385,7 +474,7 @@ var (
 			result: "ab",
 		},
 		{
-			text:       `conditional(context.reporter.kind == "client", pick(as, "test"), "inbound")`,
+			text:       `conditional(context.reporter.kind == "client", pick(abc, "test"), "inbound")`,
 			result:     "inbound",
 			referenced: []string{"-context.reporter.kind"},
 		},
@@ -507,7 +596,7 @@ var (
 		},
 		{
 			text:   `{}.a`,
-			result: errors.New("no such key: 'a'"),
+			result: errors.New("no such key: a"),
 		},
 		{
 			text:   `{'a':'b'}["a"]`,
@@ -526,7 +615,7 @@ var (
 			result: int64(1),
 		},
 		{
-			text:       `request.size + google.protobuf.Int64Value{value: 1}.value`,
+			text:       `request.size + google.protobuf.Int64Value{value: 1}`,
 			bag:        map[string]interface{}{"request.size": int64(123)},
 			result:     int64(124),
 			referenced: []string{"request.size"},
@@ -537,9 +626,197 @@ var (
 			// note that type lookup is a runtime operation, so the attribute lookup is necessary
 			referenced: []string{"-context.reporter.kind"},
 		},
+		//Taken from cel-go strings readme: https://github.com/google/cel-go/tree/master/ext
+		//Replace
+		{
+			text:       `source.name.replace('he', 'we')`,
+			bag:        map[string]interface{}{"source.name": "hello hello"},
+			result:     "wello wello",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.replace('he', 'we', -1)`,
+			bag:        map[string]interface{}{"source.name": "hello hello"},
+			result:     "wello wello",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.replace('he', 'we', 1)`,
+			bag:        map[string]interface{}{"source.name": "hello hello"},
+			result:     "wello hello",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.replace('he', 'we', 0)`,
+			bag:        map[string]interface{}{"source.name": "hello hello"},
+			result:     "hello hello",
+			referenced: []string{"source.name"},
+		},
+		//CharAt
+		{
+			text:       `source.name.charAt(4)`,
+			bag:        map[string]interface{}{"source.name": "hello"},
+			result:     "o",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.charAt(5)`,
+			bag:        map[string]interface{}{"source.name": "hello"},
+			result:     "",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.charAt(-1)`,
+			bag:        map[string]interface{}{"source.name": "hello"},
+			result:     errors.New("index out of range: -1"),
+			referenced: []string{"source.name"},
+		},
+		//index of
+		{
+			text:       `source.name.indexOf('')`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(0),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.indexOf('ello')`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(1),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.indexOf('jello')`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(-1),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.indexOf('', 2)`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(2),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.indexOf('ello', 2)`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(7),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.indexOf('ello', 20)`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     errors.New("index out of range: 20"),
+			referenced: []string{"source.name"},
+		},
+		//LastIndexOf
+		{
+			text:       `source.name.lastIndexOf('')`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(12),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.lastIndexOf('ello')`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(7),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.lastIndexOf('jello')`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(-1),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.lastIndexOf('ello', 6)`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     int64(1),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.lastIndexOf('ello', -1)`,
+			bag:        map[string]interface{}{"source.name": "hello mellow"},
+			result:     errors.New("index out of range: -1"),
+			referenced: []string{"source.name"},
+		},
+		//Split
+		{
+			text:       `source.name.split(' ')`,
+			bag:        map[string]interface{}{"source.name": "hello hello hello"},
+			result:     []string{"hello", "hello", "hello"},
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.split(' ', 0)`,
+			bag:        map[string]interface{}{"source.name": "hello hello hello"},
+			result:     []string{},
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.split(' ', 1)`,
+			bag:        map[string]interface{}{"source.name": "hello hello hello"},
+			result:     []string{"hello hello hello"},
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.split(' ', 2)`,
+			bag:        map[string]interface{}{"source.name": "hello hello hello"},
+			result:     []string{"hello", "hello hello"},
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.split(' ', -1)`,
+			bag:        map[string]interface{}{"source.name": "hello hello hello"},
+			result:     []string{"hello", "hello", "hello"},
+			referenced: []string{"source.name"},
+		},
+		//substring
+		{
+			text:       `source.name.substring(4)`,
+			bag:        map[string]interface{}{"source.name": "tacocat"},
+			result:     "cat",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.substring(0, 4)`,
+			bag:        map[string]interface{}{"source.name": "tacocat"},
+			result:     "taco",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.substring(-1)`,
+			bag:        map[string]interface{}{"source.name": "tacocat"},
+			result:     errors.New("index out of range: -1"),
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.substring(2, 1)`,
+			bag:        map[string]interface{}{"source.name": "tacocat"},
+			result:     errors.New("invalid substring range. start: 2, end: 1"),
+			referenced: []string{"source.name"},
+		},
+		//trim
+		{
+			text:       `source.name.trim()`,
+			bag:        map[string]interface{}{"source.name": "  foo  "},
+			result:     "foo",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.trim()`,
+			bag:        map[string]interface{}{"source.name": "foo \n"},
+			result:     "foo",
+			referenced: []string{"source.name"},
+		},
+		{
+			text:       `source.name.trim()`,
+			bag:        map[string]interface{}{"source.name": "foo"},
+			result:     "foo",
+			referenced: []string{"source.name"},
+		},
 	}
 	attrs = map[string]*v1beta1.AttributeManifest_AttributeInfo{
-		"as":                        {ValueType: v1beta1.STRING},
+		"abc":                       {ValueType: v1beta1.STRING},
 		"connection.duration":       {ValueType: v1beta1.DURATION},
 		"connection.id":             {ValueType: v1beta1.STRING},
 		"connection.received.bytes": {ValueType: v1beta1.INT64},
@@ -573,19 +850,22 @@ var (
 	}
 )
 
-func testExpression(env celgo.Env, provider *attributeProvider, test testCase) func(t *testing.T) {
+func testExpression(env *celgo.Env, provider *attributeProvider, test testCase, mutex sync.Locker) func(t *testing.T) {
 	return func(t *testing.T) {
 		t.Parallel()
 
 		// expressions must parse
+		mutex.Lock()
 		expr, iss := env.Parse(test.text)
 		if iss != nil && iss.Err() != nil {
+			mutex.Unlock()
 			t.Fatalf("unexpected parsing error: %v", iss.Err())
 		}
 		t.Log(debug.ToDebugString(expr.Expr()))
 
 		// expressions may fail type checking
 		checked, iss := env.Check(expr)
+		mutex.Unlock()
 		if iss != nil {
 			if test.checkErr == "" {
 				t.Fatalf("unexpected check error: %v", iss)
@@ -638,7 +918,11 @@ func TestCELExpressions(t *testing.T) {
 	provider := newAttributeProvider(attrs)
 	env := provider.newEnvironment()
 
+	//TODO remove the mutex once CEL data race is fixed
+	//ref: https://github.com/google/cel-go/issues/175
+	mutex := &sync.Mutex{}
+
 	for _, test := range tests {
-		t.Run(test.text, testExpression(env, provider, test))
+		t.Run(test.text, testExpression(env, provider, test, mutex))
 	}
 }

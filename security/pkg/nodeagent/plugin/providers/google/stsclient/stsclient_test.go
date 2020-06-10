@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,33 +18,30 @@ import (
 	"context"
 	"testing"
 
-	"istio.io/istio/security/pkg/nodeagent/plugin/providers/google/stsclient/test"
+	"istio.io/istio/security/pkg/stsservice/tokenmanager/google/mock"
 )
 
 func TestGetFederatedToken(t *testing.T) {
-	tlsFlag = false
-	defer func() {
-		tlsFlag = true
-	}()
-
+	GKEClusterURL = mock.FakeGKEClusterURL
 	r := NewPlugin()
 
-	ms, err := test.StartNewServer()
-	secureTokenEndpoint = ms.URL + "/v1/identitybindingtoken"
+	ms, err := mock.StartNewServer(t, mock.Config{Port: 0})
+	if err != nil {
+		t.Fatalf("failed to start a mock server: %v", err)
+	}
+	SecureTokenEndpoint = ms.URL + "/v1/identitybindingtoken"
 	defer func() {
-		ms.Stop()
-		secureTokenEndpoint = "https://securetoken.googleapis.com/v1/identitybindingtoken"
+		if err := ms.Stop(); err != nil {
+			t.Logf("failed to stop mock server: %v", err)
+		}
+		SecureTokenEndpoint = "https://securetoken.googleapis.com/v1/identitybindingtoken"
 	}()
 
-	if err != nil {
-		t.Fatalf("failed to start a mock server %v", err)
-	}
-
-	token, _, err := r.ExchangeToken(context.Background(), "", "")
+	token, _, _, err := r.ExchangeToken(context.Background(), mock.FakeTrustDomain, mock.FakeSubjectToken)
 	if err != nil {
 		t.Fatalf("failed to call exchange token %v", err)
 	}
-	if got, want := token, "footoken"; got != want {
-		t.Errorf("Access token got %q, expected %q", "footoken", token)
+	if token != mock.FakeFederatedToken {
+		t.Errorf("Access token got %q, expected %q", token, mock.FakeFederatedToken)
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import (
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/server"
 	"istio.io/istio/mixer/pkg/template"
-	"istio.io/istio/pkg/version"
+	"istio.io/pkg/version"
 )
 
 func serverCmd(info map[string]template.Info, adapters []adapter.InfoFn, printf, fatalf shared.FormatFn) *cobra.Command {
@@ -63,6 +63,8 @@ func serverCmd(info map[string]template.Info, adapters []adapter.InfoFn, printf,
 
 	serverCmd.PersistentFlags().StringVarP(&sa.ConfigDefaultNamespace, "configDefaultNamespace", "", sa.ConfigDefaultNamespace,
 		"Namespace used to store mesh wide configuration.")
+	serverCmd.PersistentFlags().DurationVarP(&sa.ConfigWaitTimeout, "configWaitTimeout", "", sa.ConfigWaitTimeout,
+		"Timeout until the initial set of configurations are received, before declaring as ready.")
 
 	serverCmd.PersistentFlags().StringVar(&sa.LivenessProbeOptions.Path, "livenessProbePath", sa.LivenessProbeOptions.Path,
 		"Path to the file for the liveness probe.")
@@ -77,6 +79,11 @@ func serverCmd(info map[string]template.Info, adapters []adapter.InfoFn, printf,
 
 	serverCmd.PersistentFlags().BoolVar(&sa.UseAdapterCRDs, "useAdapterCRDs", sa.UseAdapterCRDs,
 		"Whether or not to allow configuration of Mixer via adapter-specific CRDs")
+	serverCmd.PersistentFlags().BoolVar(&sa.UseTemplateCRDs, "useTemplateCRDs", sa.UseTemplateCRDs,
+		"Whether or not to allow configuration of Mixer via template-specific CRDs")
+
+	serverCmd.PersistentFlags().StringVar(&sa.WatchedNamespaces, "namespaces", sa.WatchedNamespaces,
+		"List of namespaces to watch, separated by comma; if not set, watch all namespaces")
 
 	sa.CredentialOptions.AttachCobraFlags(serverCmd)
 	sa.LoggingOptions.AttachCobraFlags(serverCmd)

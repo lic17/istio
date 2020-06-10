@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,7 +57,7 @@ func (diag diag) String() string {
 
 	msg := strings.TrimSpace(diag.message)
 	if !strings.HasSuffix(msg, ".") {
-		msg = msg + "."
+		msg += "."
 	}
 
 	if diag.location.line != "" {

@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,18 +39,18 @@ func main() {
 	<-finish
 }
 
-func foo8001(w http.ResponseWriter, r *http.Request) {
+func foo8001(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte("Listening on 8001: foo "))
 }
 
-func bar8001(w http.ResponseWriter, r *http.Request) {
+func bar8001(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte("Listening on 8001: bar "))
 }
 
-func foo8002(w http.ResponseWriter, r *http.Request) {
+func foo8002(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte("Listening on 8002: foo "))
 }
 
-func bar8002(w http.ResponseWriter, r *http.Request) {
+func bar8002(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte("Listening on 8002: bar "))
 }

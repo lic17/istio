@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -252,10 +252,8 @@ func (s *scanner) onRune(rn rune) bool {
 	case scHexLiteral:
 		switch {
 		case unicode.IsDigit(rn):
-			fallthrough
-		case rn >= 'a' && rn <= 'f':
-			fallthrough
-		case rn >= 'A' && rn <= 'F':
+		case rn >= 'a' && rn <= 'f',
+			rn >= 'A' && rn <= 'F':
 			break
 		default:
 			s.token = tkIntegerLiteral

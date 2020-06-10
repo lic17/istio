@@ -8,7 +8,7 @@ supported_templates: tracespan
 number_of_entries: 1
 ---
 <p>The <code>zipkin</code> adapter enables Istio to deliver tracing data to the
-<a href="https://cloud.google.com/zipkin/">Zipkin</a> tracing backend.</p>
+<a href="https://zipkin.io/">Zipkin</a> tracing backend.</p>
 
 <p>This adapter supports the <a href="https://istio.io/docs/reference/config/policy-and-telemetry/templates/tracespan/">tracespan template</a>.</p>
 
@@ -22,6 +22,7 @@ number_of_entries: 1
 <th>Field</th>
 <th>Type</th>
 <th>Description</th>
+<th>Required</th>
 </tr>
 </thead>
 <tbody>
@@ -34,6 +35,9 @@ number_of_entries: 1
 <p>Required.</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Params-sample_probability">
 <td><code>sampleProbability</code></td>
@@ -44,6 +48,9 @@ Defaults to 0 (sampling disabled) if unset.</p>
 
 <p>Optional.</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 </tbody>

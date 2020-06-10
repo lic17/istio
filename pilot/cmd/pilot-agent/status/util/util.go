@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-const requestTimeout = time.Second * 2
+const requestTimeout = time.Second * 1 // Default readiness probe timeout.
 
 func doHTTPGet(requestURL string) (*bytes.Buffer, error) {
 	httpClient := &http.Client{

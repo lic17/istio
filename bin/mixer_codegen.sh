@@ -22,11 +22,6 @@ die () {
 SCRIPTPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ROOTDIR="$(dirname "$SCRIPTPATH")"
 
-if [ ! -e "$ROOTDIR/Gopkg.lock" ]; then
-  echo "Please run 'dep ensure' first"
-  exit 1
-fi
-
 set -e
 
 outdir=$ROOTDIR
@@ -68,18 +63,8 @@ while getopts ':f:o:p:i:t:a:d:x:' flag; do
   esac
 done
 
-# echo "outdir: ${outdir}"
-
-# Ensure expected GOPATH setup
-if [ "$ROOTDIR" != "${GOPATH-$HOME/go}/src/istio.io/istio" ]; then
-  die "Istio not found in GOPATH/src/istio.io/"
-fi
-
 IMPORTS=(
   "--proto_path=${ROOTDIR}"
-  "--proto_path=${ROOTDIR}/vendor/istio.io/api"
-  "--proto_path=${ROOTDIR}/vendor/github.com/gogo/protobuf"
-  "--proto_path=${ROOTDIR}/vendor/github.com/gogo/googleapis"
   "--proto_path=$optimport"
 )
 
@@ -89,9 +74,9 @@ mappings=(
   "google/protobuf/duration.proto=github.com/gogo/protobuf/types"
   "google/protobuf/timestamp.proto=github.com/gogo/protobuf/types"
   "google/protobuf/struct.proto=github.com/gogo/protobuf/types"
-  "google/rpc/status.proto=github.com/gogo/googleapis/google/rpc"
-  "google/rpc/code.proto=github.com/gogo/googleapis/google/rpc"
-  "google/rpc/error_details.proto=github.com/gogo/googleapis/google/rpc"
+  "google/rpc/status.proto=istio.io/gogo-genproto/googleapis/google/rpc"
+  "google/rpc/code.proto=istio.io/gogo-genproto/googleapis/google/rpc"
+  "google/rpc/error_details.proto=istio.io/gogo-genproto/googleapis/google/rpc"
 )
 
 MAPPINGS=""
@@ -115,7 +100,7 @@ if [ "$opttemplate" = true ]; then
     "gogoproto/gogo.proto:github.com/gogo/protobuf/gogoproto"
     "google/protobuf/duration.proto:github.com/gogo/protobuf/types"
     "google/protobuf/timestamp.proto:github.com/gogo/protobuf/types"
-    "google/rpc/status.proto:github.com/gogo/googleapis/google/rpc"
+    "google/rpc/status.proto:istio.io/gogo-genproto/googleapis/google/rpc"
     "google/protobuf/struct.proto:github.com/gogo/protobuf/types"
   )
 
@@ -154,7 +139,7 @@ if [ "$opttemplate" = true ]; then
     die "template generation failure: $err";
   fi
 
-  go run "$GOPATH/src/istio.io/istio/mixer/tools/mixgen/main.go" api -t "$templateDS" --go_out "$templateHG" --proto_out "$templateHSP" "${TMPL_GEN_MAP[@]}"
+  mixgen api -t "$templateDS" --go_out "$templateHG" --proto_out "$templateHSP" "${TMPL_GEN_MAP[@]}"
 
   err=$($protoc "${IMPORTS[@]}" "$TMPL_PLUGIN" "$templateHSP")
   if [ -n "$err" ]; then
@@ -173,7 +158,7 @@ if [ "$opttemplate" = true ]; then
   fi
 
   templateYaml=${template/.proto/.yaml}
-  go run "$GOPATH/src/istio.io/istio/mixer/tools/mixgen/main.go" template -d "$templateSDS" -o "$templateYaml" -n "$(basename "$(dirname "${template}")")"
+  mixgen template -d "$templateSDS" -o "$templateYaml" -n "$(basename "$(dirname "${template}")")"
 
   rm "$templatePG"
 
@@ -194,11 +179,11 @@ if [ "$optadapter" = true ]; then
   adapteCfdDS=${file}_descriptor
   err=$($protoc "${IMPORTS[@]}" "$PLUGIN" --include_imports --include_source_info --descriptor_set_out="${adapteCfdDS}" "$file")
   if [ -n "$err" ]; then
-  die "config generation failure: $err";
+    die "config generation failure: $err";
   fi
 
   IFS=" " read -r -a extraflags_array <<< "$extraflags"
-  go run "$GOPATH/src/istio.io/istio/mixer/tools/mixgen/main.go" adapter -c "$adapteCfdDS" -o "$(dirname "${file}")" "${extraflags_array[@]}"
+  mixgen adapter -c "$adapteCfdDS" -o "$(dirname "${file}")" "${extraflags_array[@]}"
 
   exit 0
 fi
@@ -215,5 +200,5 @@ fi
 
 err=$($protoc "${IMPORTS[@]}" "$PLUGIN" --include_imports --include_source_info --descriptor_set_out="${file}_descriptor" "$file")
 if [ -n "$err" ]; then
-die "config generation failure: $err";
+  die "config generation failure: $err";
 fi

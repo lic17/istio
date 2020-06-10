@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"strings"
 	gotemplate "text/template"
@@ -27,6 +26,7 @@ import (
 
 	"istio.io/istio/mixer/cmd/shared"
 	"istio.io/istio/mixer/pkg/runtime/config/constant"
+	"istio.io/istio/pkg/test/env"
 )
 
 func templateCfgCmd(rawArgs []string, printf, fatalf shared.FormatFn) *cobra.Command {
@@ -81,12 +81,11 @@ spec:
 		fatalf("template in invalid: %v", err)
 	}
 
-	goPath := os.Getenv("GOPATH")
 	tmplObj := &templateCRVar{
 		Name:       name,
 		Namespace:  ns,
 		Descriptor: base64.StdEncoding.EncodeToString(byts),
-		RawCommand: strings.Replace(rawCommand, goPath, "$GOPATH", -1),
+		RawCommand: strings.Replace(rawCommand, env.IstioSrc, "$REPO_ROOT", -1),
 	}
 
 	t := gotemplate.New("templatecr")

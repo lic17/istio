@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,22 +19,23 @@ import (
 	"sync"
 	"time"
 
-	ads "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
+	discoveryv2 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
+	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"github.com/google/uuid"
 	"go.uber.org/atomic"
-	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 
+	"istio.io/istio/security/pkg/server/ca/authenticate"
+
+	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/core"
-	"istio.io/istio/pkg/features/pilot"
+	"istio.io/istio/pilot/pkg/serviceregistry"
+	"istio.io/istio/pilot/pkg/serviceregistry/aggregate"
+	"istio.io/istio/pilot/pkg/util/sets"
 )
 
 var (
-	// Failsafe to implement periodic refresh, in case events or cache invalidation fail.
-	// Disabled by default.
-	periodicRefreshDuration = 0 * time.Second
-
 	versionMutex sync.RWMutex
 	// version is the timestamp of the last registry event.
 	version = "0"
@@ -43,50 +44,27 @@ var (
 
 	periodicRefreshMetrics = 10 * time.Second
 
-	// DebounceAfter is the delay added to events to wait
+	// debounceAfter is the delay added to events to wait
 	// after a registry/config event for debouncing.
 	// This will delay the push by at least this interval, plus
 	// the time getting subsequent events. If no change is
 	// detected the push will happen, otherwise we'll keep
 	// delaying until things settle.
-	DebounceAfter time.Duration
+	debounceAfter time.Duration
 
-	// DebounceMax is the maximum time to wait for events
+	// debounceMax is the maximum time to wait for events
 	// while debouncing. Defaults to 10 seconds. If events keep
 	// showing up with no break for this time, we'll trigger a push.
-	DebounceMax time.Duration
-)
+	debounceMax time.Duration
 
-const (
-	typePrefix = "type.googleapis.com/envoy.api.v2."
-
-	// Constants used for XDS
-
-	// ClusterType is used for cluster discovery. Typically first request received
-	ClusterType = typePrefix + "Cluster"
-	// EndpointType is used for EDS and ADS endpoint discovery. Typically second request.
-	EndpointType = typePrefix + "ClusterLoadAssignment"
-	// ListenerType is sent after clusters and endpoints.
-	ListenerType = typePrefix + "Listener"
-	// RouteType is sent after listeners.
-	RouteType = typePrefix + "RouteConfiguration"
+	// enableEDSDebounce indicates whether EDS pushes should be debounced.
+	enableEDSDebounce bool
 )
 
 func init() {
-	DebounceAfter = envDuration(pilot.DebounceAfter, 100*time.Millisecond)
-	DebounceMax = envDuration(pilot.DebounceMax, 10*time.Second)
-}
-
-func envDuration(envVal string, def time.Duration) time.Duration {
-	if envVal == "" {
-		return def
-	}
-	d, err := time.ParseDuration(envVal)
-	if err != nil {
-		adsLog.Warnf("Invalid value %s %v", envVal, err)
-		return def
-	}
-	return d
+	debounceAfter = features.DebounceAfter
+	debounceMax = features.DebounceMax
+	enableEDSDebounce = features.EnableEDSDebounce.Get()
 }
 
 // DiscoveryServer is Pilot's gRPC implementation for Envoy's v2 xds APIs
@@ -97,20 +75,19 @@ type DiscoveryServer struct {
 	// MemRegistry is used for debug and load testing, allow adding services. Visible for testing.
 	MemRegistry *MemServiceDiscovery
 
+	// MemRegistry is used for debug and load testing, allow adding services. Visible for testing.
+	MemConfigController model.ConfigStoreCache
+
 	// ConfigGenerator is responsible for generating data plane configuration using Istio networking
 	// APIs and service registry info
 	ConfigGenerator core.ConfigGenerator
 
-	// ConfigController provides readiness info (if initial sync is complete)
-	ConfigController model.ConfigStoreCache
-
-	// rate limiter for sending updates during full ads push.
-	rateLimiter *rate.Limiter
-
-	// rate limiter for sending config to new connections.
-	// We want to have a larger limit for new connections because until configuration is sent the proxies
-	// will not be ready.
-	initRateLimiter *rate.Limiter
+	// Generators allow customizing the generated config, based on the client metadata.
+	// Key is the generator type - will match the Generator metadata to set the per-connection
+	// default generator, or the combination of Generator metadata and TypeUrl to select a
+	// different generator for a type.
+	// Normal istio clients use the default generator - will not be impacted by this.
+	Generators map[string]model.XdsResourceGenerator
 
 	concurrentPushLimit chan struct{}
 
@@ -118,33 +95,35 @@ type DiscoveryServer struct {
 	// Defaults to false, can be enabled with PILOT_DEBUG_ADSZ_CONFIG=1
 	DebugConfigs bool
 
-	// mutex protecting global structs updated or read by ADS service, including EDSUpdates and
+	// mutex protecting global structs updated or read by ADS service, including ConfigsUpdated and
 	// shards.
 	mutex sync.RWMutex
 
 	// EndpointShards for a service. This is a global (per-server) list, built from
-	// incremental updates.
-	EndpointShardsByService map[string]*EndpointShards
+	// incremental updates. This is keyed by service and namespace
+	EndpointShardsByService map[string]map[string]*EndpointShards
 
-	// WorkloadsById keeps track of information about a workload, based on direct notifications
-	// from registry. This acts as a cache and allows detecting changes.
-	WorkloadsByID map[string]*Workload
-
-	// edsUpdates keeps track of all service updates since last full push.
-	// Key is the hostname (servicename). Value is set when any shard part of the service is
-	// updated. For 1.0.3+ it is used only for tracking incremental
-	// pushes between the 2 packages.
-	edsUpdates map[string]struct{}
-
-	updateChannel chan *updateReq
+	pushChannel chan *model.PushRequest
 
 	// mutex used for config update scheduling (former cache update mutex)
 	updateMutex sync.RWMutex
-}
 
-// updateReq includes info about the requested update.
-type updateReq struct {
-	full bool
+	// pushQueue is the buffer that used after debounce and before the real xds push.
+	pushQueue *PushQueue
+
+	// debugHandlers is the list of all the supported debug handlers.
+	debugHandlers map[string]string
+
+	// adsClients reflect active gRPC channels, for both ADS and EDS.
+	adsClients      map[string]*XdsConnection
+	adsClientsMutex sync.RWMutex
+
+	StatusReporter DistributionStatusCache
+
+	// Authenticators for XDS requests. Should be same/subset of the CA authenticators.
+	Authenticators []authenticate.Authenticator
+
+	InternalGen *InternalGen
 }
 
 // EndpointShards holds the set of endpoint shards of a service. Registries update
@@ -164,159 +143,130 @@ type EndpointShards struct {
 	// current list, a full push will be forced, to trigger a secure naming update.
 	// Due to the larger time, it is still possible that connection errors will occur while
 	// CDS is updated.
-	ServiceAccounts map[string]bool
-}
-
-// Workload has the minimal info we need to detect if we need to push workloads, and to
-// cache data to avoid expensive model allocations.
-type Workload struct {
-	// Labels
-	Labels map[string]string
-}
-
-func intEnv(envVal string, def int) int {
-	if len(envVal) == 0 {
-		return def
-	}
-	n, err := strconv.Atoi(envVal)
-	if err == nil && n > 0 {
-		return n
-	}
-	return def
+	ServiceAccounts sets.Set
 }
 
 // NewDiscoveryServer creates DiscoveryServer that sources data from Pilot's internal mesh data structures
-func NewDiscoveryServer(env *model.Environment, generator core.ConfigGenerator, ctl model.Controller, configCache model.ConfigStoreCache) *DiscoveryServer {
+func NewDiscoveryServer(env *model.Environment, plugins []string) *DiscoveryServer {
 	out := &DiscoveryServer{
 		Env:                     env,
-		ConfigGenerator:         generator,
-		ConfigController:        configCache,
-		EndpointShardsByService: map[string]*EndpointShards{},
-		WorkloadsByID:           map[string]*Workload{},
-		edsUpdates:              map[string]struct{}{},
-		concurrentPushLimit:     make(chan struct{}, 20), // TODO(hzxuzhonghu): support configuration
-		updateChannel:           make(chan *updateReq, 10),
+		ConfigGenerator:         core.NewConfigGenerator(plugins),
+		Generators:              map[string]model.XdsResourceGenerator{},
+		EndpointShardsByService: map[string]map[string]*EndpointShards{},
+		concurrentPushLimit:     make(chan struct{}, features.PushThrottle),
+		pushChannel:             make(chan *model.PushRequest, 10),
+		pushQueue:               NewPushQueue(),
+		DebugConfigs:            features.DebugConfigs,
+		debugHandlers:           map[string]string{},
+		adsClients:              map[string]*XdsConnection{},
 	}
-	env.PushContext = model.NewPushContext()
-	go out.handleUpdates()
 
-	// Flush cached discovery responses whenever services, service
-	// instances, or routing configuration changes.
-	serviceHandler := func(*model.Service, model.Event) { out.clearCache() }
-	if err := ctl.AppendServiceHandler(serviceHandler); err != nil {
-		return nil
-	}
-	instanceHandler := func(*model.ServiceInstance, model.Event) { out.clearCache() }
-	if err := ctl.AppendInstanceHandler(instanceHandler); err != nil {
-		return nil
+	if features.XDSAuth {
+		// This is equivalent with the mTLS authentication for workload-to-workload.
+		// The GRPC server is configured in bootstrap.initSecureDiscoveryService, using the root
+		// certificate as 'ClientCAs'. To accept additional signers for client identities - add them
+		// there, will be used for CA signing as well.
+		out.Authenticators = append(out.Authenticators, &authenticate.ClientCertAuthenticator{})
+
+		// TODO: we may want to support JWT/OIDC auth as well - using the same list of auth as
+		// CA. Will require additional refactoring - probably best for 1.7.
 	}
 
 	// Flush cached discovery responses when detecting jwt public key change.
-	model.JwtKeyResolver.PushFunc = out.ClearCache
-
-	if configCache != nil {
-		// TODO: changes should not trigger a full recompute of LDS/RDS/CDS/EDS
-		// (especially mixerclient HTTP and quota)
-		configHandler := func(model.Config, model.Event) { out.clearCache() }
-		for _, descriptor := range model.IstioConfigTypes {
-			configCache.RegisterEventHandler(descriptor.Type, configHandler)
-		}
+	model.JwtKeyResolver.PushFunc = func() {
+		out.ConfigUpdate(&model.PushRequest{Full: true, Reason: []model.TriggerReason{model.UnknownTrigger}})
 	}
-
-	go out.periodicRefresh()
-
-	go out.periodicRefreshMetrics()
-
-	out.DebugConfigs = pilot.DebugConfigs
-
-	pushThrottle := intEnv(pilot.PushThrottle, 10)
-	pushBurst := intEnv(pilot.PushBurst, 100)
-
-	adsLog.Infof("Starting ADS server with rateLimiter=%d burst=%d", pushThrottle, pushBurst)
-	out.rateLimiter = rate.NewLimiter(rate.Limit(pushThrottle), pushBurst)
-	out.initRateLimiter = rate.NewLimiter(rate.Limit(pushThrottle*2), pushBurst*2)
 
 	return out
 }
 
 // Register adds the ADS and EDS handles to the grpc server
 func (s *DiscoveryServer) Register(rpcs *grpc.Server) {
-	// EDS must remain registered for 0.8, for smooth upgrade from 0.7
-	// 0.7 proxies will use this service.
-	ads.RegisterAggregatedDiscoveryServiceServer(rpcs, s)
+	// Register v2 and v3 servers
+	discovery.RegisterAggregatedDiscoveryServiceServer(rpcs, s)
+	discoveryv2.RegisterAggregatedDiscoveryServiceServer(rpcs, s.createV2Adapter())
 }
 
-// Singleton, refresh the cache - may not be needed if events work properly, just a failsafe
-// ( will be removed after change detection is implemented, to double check all changes are
-// captured)
-func (s *DiscoveryServer) periodicRefresh() {
-	envOverride := pilot.RefreshDuration
-	if len(envOverride) > 0 {
-		var err error
-		periodicRefreshDuration, err = time.ParseDuration(envOverride)
-		if err != nil {
-			adsLog.Warn("Invalid value for V2_REFRESH")
+func (s *DiscoveryServer) Start(stopCh <-chan struct{}) {
+	adsLog.Infof("Starting ADS server")
+	go s.handleUpdates(stopCh)
+	go s.periodicRefreshMetrics(stopCh)
+	go s.sendPushes(stopCh)
+}
+
+func (s *DiscoveryServer) getNonK8sRegistries() []serviceregistry.Instance {
+	var registries []serviceregistry.Instance
+	var nonK8sRegistries []serviceregistry.Instance
+
+	if agg, ok := s.Env.ServiceDiscovery.(*aggregate.Controller); ok {
+		registries = agg.GetRegistries()
+	} else {
+		registries = []serviceregistry.Instance{
+			serviceregistry.Simple{
+				ServiceDiscovery: s.Env.ServiceDiscovery,
+			},
 		}
 	}
-	if periodicRefreshDuration == 0 {
-		return
+
+	for _, registry := range registries {
+		if registry.Provider() != serviceregistry.Kubernetes || registry.Provider() != serviceregistry.External {
+			nonK8sRegistries = append(nonK8sRegistries, registry)
+		}
 	}
-	ticker := time.NewTicker(periodicRefreshDuration)
-	defer ticker.Stop()
-	for range ticker.C {
-		adsLog.Infof("ADS: periodic push of envoy configs %s", versionInfo())
-		s.AdsPushAll(versionInfo(), s.globalPushContext(), true, nil)
-	}
+	return nonK8sRegistries
 }
 
 // Push metrics are updated periodically (10s default)
-func (s *DiscoveryServer) periodicRefreshMetrics() {
+func (s *DiscoveryServer) periodicRefreshMetrics(stopCh <-chan struct{}) {
 	ticker := time.NewTicker(periodicRefreshMetrics)
 	defer ticker.Stop()
-	for range ticker.C {
-		push := s.globalPushContext()
-		push.Mutex.Lock()
-		if push.End != timeZero {
+	for {
+		select {
+		case <-ticker.C:
+			push := s.globalPushContext()
+			push.Mutex.Lock()
+
 			model.LastPushMutex.Lock()
-			model.LastPushStatus = push
+			if model.LastPushStatus != push {
+				model.LastPushStatus = push
+				push.UpdateMetrics()
+				out, _ := model.LastPushStatus.StatusJSON()
+				adsLog.Infof("Push Status: %s", string(out))
+			}
 			model.LastPushMutex.Unlock()
+
+			push.Mutex.Unlock()
+		case <-stopCh:
+			return
 		}
-		push.UpdateMetrics()
-		push.Mutex.Unlock()
 	}
 }
 
 // Push is called to push changes on config updates using ADS. This is set in DiscoveryService.Push,
 // to avoid direct dependencies.
-func (s *DiscoveryServer) Push(full bool, edsUpdates map[string]struct{}) {
-	if !full {
-		adsLog.Infof("XDS Incremental Push EDS:%d", len(edsUpdates))
-		go s.AdsPushAll(versionInfo(), s.globalPushContext(), false, edsUpdates)
+func (s *DiscoveryServer) Push(req *model.PushRequest) {
+	if !req.Full {
+		req.Push = s.globalPushContext()
+		go s.AdsPushAll(versionInfo(), req)
 		return
 	}
 	// Reset the status during the push.
-	pc := s.globalPushContext()
-	if pc != nil {
-		pc.OnConfigChange()
+	oldPushContext := s.globalPushContext()
+	if oldPushContext != nil {
+		oldPushContext.OnConfigChange()
 	}
 	// PushContext is reset after a config change. Previous status is
 	// saved.
 	t0 := time.Now()
 	push := model.NewPushContext()
-	err := push.InitContext(s.Env)
-	if err != nil {
-		adsLog.Errorf("XDS: failed to update services %v", err)
+	if err := push.InitContext(s.Env, oldPushContext, req); err != nil {
+		adsLog.Errorf("XDS: Failed to update services: %v", err)
 		// We can't push if we can't read the data - stick with previous version.
-		pushContextErrors.Inc()
+		pushContextErrors.Increment()
 		return
 	}
 
-	if err = s.ConfigGenerator.BuildSharedPushState(s.Env, push); err != nil {
-		adsLog.Errorf("XDS: Failed to rebuild share state in configgen: %v", err)
-		totalXDSInternalErrors.Add(1)
-		return
-	}
-	if err := s.updateServiceShards(push); err != nil {
+	if err := s.UpdateServiceShards(push); err != nil {
 		return
 	}
 
@@ -333,11 +283,12 @@ func (s *DiscoveryServer) Push(full bool, edsUpdates map[string]struct{}) {
 	version = versionLocal
 	versionMutex.Unlock()
 
-	go s.AdsPushAll(versionLocal, push, true, nil)
+	req.Push = push
+	go s.AdsPushAll(versionLocal, req)
 }
 
-func nonce() string {
-	return uuid.New().String()
+func nonce(noncePrefix string) string {
+	return noncePrefix + uuid.New().String()
 }
 
 func versionInfo() string {
@@ -353,93 +304,140 @@ func (s *DiscoveryServer) globalPushContext() *model.PushContext {
 	return s.Env.PushContext
 }
 
-// ClearCache is wrapper for clearCache method, used when new controller gets
-// instantiated dynamically
-func (s *DiscoveryServer) ClearCache() {
-	s.clearCache()
-}
-
-// Start the actual push. Called from a timer.
-func (s *DiscoveryServer) doPush(full bool) {
-	// more config update events may happen while doPush is processing.
-	// we don't want to lose updates.
-	s.mutex.Lock()
-	// Swap the edsUpdates map - tracking requests for incremental updates.
-	// The changes to the map are protected by ds.mutex.
-	edsUpdates := s.edsUpdates
-	// Reset - any new updates will be tracked by the new map
-	s.edsUpdates = map[string]struct{}{}
-	s.mutex.Unlock()
-
-	s.Push(full, edsUpdates)
-}
-
-// clearCache will clear all envoy caches. Called by service, instance and config handlers.
-// This will impact the performance, since envoy will need to recalculate.
-func (s *DiscoveryServer) clearCache() {
-	s.ConfigUpdate(true)
-}
-
 // ConfigUpdate implements ConfigUpdater interface, used to request pushes.
 // It replaces the 'clear cache' from v1.
-func (s *DiscoveryServer) ConfigUpdate(full bool) {
-	s.updateChannel <- &updateReq{full: full}
+func (s *DiscoveryServer) ConfigUpdate(req *model.PushRequest) {
+	inboundConfigUpdates.Increment()
+	s.pushChannel <- req
 }
 
-// Debouncing and update request happens in a separate thread, it uses locks
+// Debouncing and push request happens in a separate thread, it uses locks
 // and we want to avoid complications, ConfigUpdate may already hold other locks.
-func (s *DiscoveryServer) handleUpdates() {
-	handleUpdates(s.updateChannel, DebounceAfter, DebounceMax, s.doPush)
-}
-
-// handleUpdates processes events from updateChannel
+// handleUpdates processes events from pushChannel
 // It ensures that at minimum minQuiet time has elapsed since the last event before processing it.
 // It also ensures that at most maxDelay is elapsed between receiving an event and processing it.
-func handleUpdates(updateChannel <-chan *updateReq, minQuiet time.Duration, maxDelay time.Duration, processUpdate func(bool)) {
+func (s *DiscoveryServer) handleUpdates(stopCh <-chan struct{}) {
+	debounce(s.pushChannel, stopCh, s.Push)
+}
+
+// The debounce helper function is implemented to enable mocking
+func debounce(ch chan *model.PushRequest, stopCh <-chan struct{}, pushFn func(req *model.PushRequest)) {
 	var timeChan <-chan time.Time
 	var startDebounce time.Time
 	var lastConfigUpdateTime time.Time
 
-	configUpdateCounter := 0
 	pushCounter := 0
-
 	debouncedEvents := 0
-	fullPush := false
 
-	for {
-		select {
-		case r := <-updateChannel:
-			lastConfigUpdateTime = time.Now()
-			if debouncedEvents == 0 {
-				timeChan = time.After(minQuiet)
-				startDebounce = lastConfigUpdateTime
-			}
-			debouncedEvents++
-			configUpdateCounter++
-			// fullPush is sticky if any debounced event requires a fullPush
-			if r.full {
-				fullPush = true
-			}
+	// Keeps track of the push requests. If updates are debounce they will be merged.
+	var req *model.PushRequest
 
-		case now := <-timeChan:
-			timeChan = nil
+	free := true
+	freeCh := make(chan struct{}, 1)
 
-			eventDelay := now.Sub(startDebounce)
-			quietTime := now.Sub(lastConfigUpdateTime)
-			// it has been too long or quiet enough
-			if eventDelay >= maxDelay || quietTime >= minQuiet {
+	push := func(req *model.PushRequest) {
+		pushFn(req)
+		freeCh <- struct{}{}
+	}
+
+	pushWorker := func() {
+		eventDelay := time.Since(startDebounce)
+		quietTime := time.Since(lastConfigUpdateTime)
+		// it has been too long or quiet enough
+		if eventDelay >= debounceMax || quietTime >= debounceAfter {
+			if req != nil {
 				pushCounter++
 				adsLog.Infof("Push debounce stable[%d] %d: %v since last change, %v since last push, full=%v",
 					pushCounter, debouncedEvents,
-					quietTime, eventDelay, fullPush)
+					quietTime, eventDelay, req.Full)
 
-				go processUpdate(fullPush)
-				fullPush = false
+				free = false
+				go push(req)
+				req = nil
 				debouncedEvents = 0
+			}
+		} else {
+			timeChan = time.After(debounceAfter - quietTime)
+		}
+	}
+
+	for {
+		select {
+		case <-freeCh:
+			free = true
+			pushWorker()
+		case r := <-ch:
+			// If reason is not set, record it as an unknown reason
+			if len(r.Reason) == 0 {
+				r.Reason = []model.TriggerReason{model.UnknownTrigger}
+			}
+			if !enableEDSDebounce && !r.Full {
+				// trigger push now, just for EDS
+				go pushFn(r)
 				continue
 			}
 
-			timeChan = time.After(minQuiet - quietTime)
+			lastConfigUpdateTime = time.Now()
+			if debouncedEvents == 0 {
+				timeChan = time.After(debounceAfter)
+				startDebounce = lastConfigUpdateTime
+			}
+			debouncedEvents++
+
+			req = req.Merge(r)
+		case <-timeChan:
+			if free {
+				pushWorker()
+			}
+		case <-stopCh:
+			return
 		}
 	}
+}
+
+func doSendPushes(stopCh <-chan struct{}, semaphore chan struct{}, queue *PushQueue) {
+	for {
+		select {
+		case <-stopCh:
+			return
+		default:
+			// We can send to it until it is full, then it will block until a pushes finishes and reads from it.
+			// This limits the number of pushes that can happen concurrently
+			semaphore <- struct{}{}
+
+			// Get the next proxy to push. This will block if there are no updates required.
+			client, info := queue.Dequeue()
+			recordPushTriggers(info.Reason...)
+			// Signals that a push is done by reading from the semaphore, allowing another send on it.
+			doneFunc := func() {
+				queue.MarkDone(client)
+				<-semaphore
+			}
+
+			proxiesQueueTime.Record(time.Since(info.Start).Seconds())
+
+			go func() {
+				pushEv := &XdsEvent{
+					full:           info.Full,
+					push:           info.Push,
+					done:           doneFunc,
+					start:          info.Start,
+					configsUpdated: info.ConfigsUpdated,
+					noncePrefix:    info.Push.Version,
+				}
+
+				select {
+				case client.pushChannel <- pushEv:
+					return
+				case <-client.stream.Context().Done(): // grpc stream was closed
+					doneFunc()
+					adsLog.Infof("Client closed connection %v", client.ConID)
+				}
+			}()
+		}
+	}
+}
+
+func (s *DiscoveryServer) sendPushes(stopCh <-chan struct{}) {
+	doSendPushes(stopCh, s.concurrentPushLimit, s.pushQueue)
 }

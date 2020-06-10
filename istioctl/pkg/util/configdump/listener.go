@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,13 @@
 package configdump
 
 import (
-	"fmt"
 	"sort"
 
-	adminapi "github.com/envoyproxy/go-control-plane/envoy/admin/v2alpha"
-	proto "github.com/gogo/protobuf/types"
+	adminapi "github.com/envoyproxy/go-control-plane/envoy/admin/v3"
+	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
+	"github.com/golang/protobuf/ptypes"
+
+	v3 "istio.io/istio/pilot/pkg/proxy/envoy/v3"
 )
 
 // GetDynamicListenerDump retrieves a listener dump with just dynamic active listeners in it
@@ -28,29 +30,48 @@ func (w *Wrapper) GetDynamicListenerDump(stripVersions bool) (*adminapi.Listener
 	if err != nil {
 		return nil, err
 	}
-	dal := listenerDump.GetDynamicActiveListeners()
+
+	dal := make([]*adminapi.ListenersConfigDump_DynamicListener, 0)
+	for _, l := range listenerDump.DynamicListeners {
+		if l.ActiveState != nil {
+			dal = append(dal, l)
+		}
+	}
+
 	sort.Slice(dal, func(i, j int) bool {
-		return dal[i].Listener.Name < dal[j].Listener.Name
+		l := &listener.Listener{}
+		// Support v2 or v3 in config dump. See ads.go:RequestedTypes for more info.
+		dal[i].ActiveState.Listener.TypeUrl = v3.ListenerType
+		dal[j].ActiveState.Listener.TypeUrl = v3.ListenerType
+		err = ptypes.UnmarshalAny(dal[i].ActiveState.Listener, l)
+		if err != nil {
+			return false
+		}
+		name := l.Name
+		err = ptypes.UnmarshalAny(dal[j].ActiveState.Listener, l)
+		if err != nil {
+			return false
+		}
+		return name < l.Name
 	})
 	if stripVersions {
 		for i := range dal {
-			dal[i].VersionInfo = ""
-			dal[i].LastUpdated = nil
+			dal[i].ActiveState.VersionInfo = ""
+			dal[i].ActiveState.LastUpdated = nil
+			dal[i].Name = "" // In Istio 1.5, Envoy creates this; suppress it
 		}
 	}
-	return &adminapi.ListenersConfigDump{DynamicActiveListeners: dal}, nil
+	return &adminapi.ListenersConfigDump{DynamicListeners: dal}, nil
 }
 
 // GetListenerConfigDump retrieves the listener config dump from the ConfigDump
 func (w *Wrapper) GetListenerConfigDump() (*adminapi.ListenersConfigDump, error) {
-	// The listener dump is the third one in the list.
-	// See https://www.envoyproxy.io/docs/envoy/latest/api-v2/admin/v2alpha/config_dump.proto
-	if len(w.Configs) < 3 {
-		return nil, fmt.Errorf("config dump has no listener dump")
+	listenerDumpAny, err := w.getSection(listeners)
+	if err != nil {
+		return nil, err
 	}
-	listenerDumpAny := w.Configs[2]
 	listenerDump := &adminapi.ListenersConfigDump{}
-	err := proto.UnmarshalAny(&listenerDumpAny, listenerDump)
+	err = ptypes.UnmarshalAny(&listenerDumpAny, listenerDump)
 	if err != nil {
 		return nil, err
 	}

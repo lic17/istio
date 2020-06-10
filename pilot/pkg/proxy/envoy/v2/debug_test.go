@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ import (
 
 func TestSyncz(t *testing.T) {
 	t.Run("return the sent and ack status of adsClient connections", func(t *testing.T) {
-		_, tearDown := initLocalPilotTestEnv(t)
+		s, tearDown := initLocalPilotTestEnv(t)
 		defer tearDown()
 
 		adsstr, cancel, err := connectADS(util.MockPilotGrpcAddr)
@@ -75,11 +75,11 @@ func TestSyncz(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		node, _ := model.ParseServiceNodeWithMetadata(sidecarID(app3Ip, "syncApp"), nil)
-		verifySyncStatus(t, node.ID, true, true)
+		node, _ := model.ParseServiceNodeWithMetadata(sidecarID(app3Ip, "syncApp"), &model.NodeMetadata{})
+		verifySyncStatus(t, s.EnvoyXdsServer, node.ID, true, true)
 	})
 	t.Run("sync status not set when Nackd", func(t *testing.T) {
-		_, tearDown := initLocalPilotTestEnv(t)
+		s, tearDown := initLocalPilotTestEnv(t)
 		defer tearDown()
 
 		adsstr, cancel, err := connectADS(util.MockPilotGrpcAddr)
@@ -122,18 +122,18 @@ func TestSyncz(t *testing.T) {
 		if err := sendRDSNack(sidecarID(app3Ip, "syncApp2"), []string{"80", "8080"}, rdsResponse.Nonce, adsstr); err != nil {
 			t.Fatal(err)
 		}
-		node, _ := model.ParseServiceNodeWithMetadata(sidecarID(app3Ip, "syncApp2"), nil)
-		verifySyncStatus(t, node.ID, true, false)
+		node, _ := model.ParseServiceNodeWithMetadata(sidecarID(app3Ip, "syncApp2"), &model.NodeMetadata{})
+		verifySyncStatus(t, s.EnvoyXdsServer, node.ID, true, false)
 	})
 }
 
-func getSyncStatus(t *testing.T) []v2.SyncStatus {
+func getSyncStatus(t *testing.T, server *v2.DiscoveryServer) []v2.SyncStatus {
 	req, err := http.NewRequest("GET", "/debug", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rr := httptest.NewRecorder()
-	syncz := http.HandlerFunc(v2.Syncz)
+	syncz := http.HandlerFunc(server.Syncz)
 	syncz.ServeHTTP(rr, req)
 	got := []v2.SyncStatus{}
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
@@ -142,12 +142,12 @@ func getSyncStatus(t *testing.T) []v2.SyncStatus {
 	return got
 }
 
-func verifySyncStatus(t *testing.T, nodeID string, wantSent, wantAcked bool) {
+func verifySyncStatus(t *testing.T, s *v2.DiscoveryServer, nodeID string, wantSent, wantAcked bool) {
 	// This is a mostly horrible hack because the single pilot instance is shared across multiple tests
 	// This makes this test contaminated by others and gives it horrible timing windows
 	attempts := 5
 	for i := 0; i < attempts; i++ {
-		gotStatus := getSyncStatus(t)
+		gotStatus := getSyncStatus(t, s)
 		var errorHandler func(string, ...interface{})
 		if i == attempts-1 {
 			errorHandler = t.Errorf
@@ -183,9 +183,6 @@ func verifySyncStatus(t *testing.T, nodeID string, wantSent, wantAcked bool) {
 				if (ss.EndpointAcked != "") != wantAcked {
 					errorHandler("wanted EndpointAcked set %v got %v for %v", wantAcked, ss.EndpointAcked, nodeID)
 				}
-				if (ss.EndpointPercent != 0) != wantAcked {
-					errorHandler("wanted EndpointPercent set %v got %v for %v", wantAcked, ss.EndpointPercent, nodeID)
-				}
 				return
 			}
 		}
@@ -220,35 +217,35 @@ func TestConfigDump(t *testing.T) {
 			s, tearDown := initLocalPilotTestEnv(t)
 			defer tearDown()
 
-			for i := 0; i < 2; i++ {
-				envoy, cancel, err := connectADS(util.MockPilotGrpcAddr)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer cancel()
-				if err := sendCDSReq(sidecarID(app3Ip, "dumpApp"), envoy); err != nil {
-					t.Fatal(err)
-				}
-				if err := sendLDSReq(sidecarID(app3Ip, "dumpApp"), envoy); err != nil {
-					t.Fatal(err)
-				}
-				// Only most recent proxy will have routes
-				if i == 1 {
-					if err := sendRDSReq(sidecarID(app3Ip, "dumpApp"), []string{"80", "8080"}, "", envoy); err != nil {
-						t.Fatal(err)
-					}
-					_, err := adsReceive(envoy, 5*time.Second)
-					if err != nil {
-						t.Fatal("Recv failed", err)
-					}
-				}
-				for j := 0; j < 2; j++ {
-					_, err := adsReceive(envoy, 5*time.Second)
-					if err != nil {
-						t.Fatal("Recv failed", err)
-					}
-				}
+			envoy, cancel, err := connectADS(util.MockPilotGrpcAddr)
+			if err != nil {
+				t.Fatal(err)
 			}
+			defer cancel()
+			if err := sendCDSReq(sidecarID(app3Ip, "dumpApp"), envoy); err != nil {
+				t.Fatal(err)
+			}
+			if err := sendLDSReq(sidecarID(app3Ip, "dumpApp"), envoy); err != nil {
+				t.Fatal(err)
+			}
+			// Only most recent proxy will have routes
+			if err := sendRDSReq(sidecarID(app3Ip, "dumpApp"), []string{"80", "8080"}, "", envoy); err != nil {
+				t.Fatal(err)
+			}
+			// Expect CDS, LDS, then RDS
+			_, err = adsReceive(envoy, 5*time.Second)
+			if err != nil {
+				t.Fatal("Recv cds failed", err)
+			}
+			_, err = adsReceive(envoy, 5*time.Second)
+			if err != nil {
+				t.Fatal("Recv lds failed", err)
+			}
+			_, err = adsReceive(envoy, 5*time.Second)
+			if err != nil {
+				t.Fatal("Recv rds failed", err)
+			}
+
 			wrapper := getConfigDump(t, s.EnvoyXdsServer, tt.proxyID, tt.wantCode)
 			if wrapper != nil {
 				if rs, err := wrapper.GetDynamicRouteDump(false); err != nil || len(rs.DynamicRouteConfigs) == 0 {
@@ -280,8 +277,24 @@ func getConfigDump(t *testing.T, s *v2.DiscoveryServer, proxyID string, wantCode
 		return nil
 	}
 	got := &configdump.Wrapper{}
-	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+	if err := got.UnmarshalJSON(rr.Body.Bytes()); err != nil {
 		t.Fatalf(err.Error())
 	}
 	return got
+}
+
+func TestDebugHandlers(t *testing.T) {
+	server, tearDown := initLocalPilotTestEnv(t)
+	defer tearDown()
+
+	req, err := http.NewRequest("GET", "/debug", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	debug := http.HandlerFunc(server.EnvoyXdsServer.Debug)
+	debug.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Errorf("Error in generatating debug endpoint list")
+	}
 }

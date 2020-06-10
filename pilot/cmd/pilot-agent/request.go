@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ var (
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(c *cobra.Command, args []string) error {
 			command := &request.Command{
-				Address: "127.0.0.1:15000",
+				Address: "localhost:15000",
 				Client: &http.Client{
 					Timeout: 60 * time.Second,
 				},

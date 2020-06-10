@@ -1,4 +1,4 @@
-//  Copyright 2018 Istio Authors
+//  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -27,9 +27,10 @@ import (
 	"github.com/gogo/protobuf/types"
 
 	"istio.io/api/policy/v1beta1"
-	"istio.io/istio/galley/pkg/metadata/kube"
+
 	"istio.io/istio/mixer/pkg/config/store"
 	"istio.io/istio/mixer/pkg/runtime/config/constant"
+	"istio.io/istio/pkg/config/schema"
 	"istio.io/istio/pkg/mcp/snapshot"
 	"istio.io/istio/pkg/mcp/source"
 	mcptest "istio.io/istio/pkg/mcp/testing"
@@ -71,10 +72,10 @@ func init() {
 	}
 }
 
-func collectionOf(nonLegacyKind string) string { //nolint: unparam
-	for _, u := range kube.Types.All() {
-		if u.Kind == nonLegacyKind {
-			return u.Target.Collection.String()
+func collectionOf(nonLegacyKind string) string { // nolint: unparam
+	for _, r := range schema.MustGet().KubeCollections().All() {
+		if r.Resource().Kind() == nonLegacyKind {
+			return schema.MustGet().DirectTransformSettings().Mapping()[r.Name()].String()
 		}
 	}
 
@@ -82,7 +83,7 @@ func collectionOf(nonLegacyKind string) string { //nolint: unparam
 }
 
 type testState struct {
-	mapping *mapping
+	mapping *schema.Mapping
 	server  *mcptest.Server
 	backend store.Backend
 
@@ -97,14 +98,14 @@ func createState(t *testing.T) *testState {
 
 	var collections []source.CollectionOptions
 	var kinds []string
-	m, err := constructMapping(mixerKinds, kube.Types)
+	m, err := schema.ConstructKindMapping(mixerKinds, schema.MustGet())
 	if err != nil {
 		t.Fatal(err)
 	}
 	st.mapping = m
-	for t, k := range st.mapping.collectionsToKinds {
+	for col, k := range st.mapping.CollectionsToKinds {
 		collections = append(collections, source.CollectionOptions{
-			Name: t,
+			Name: col,
 		})
 		kinds = append(kinds, k)
 	}
@@ -148,13 +149,13 @@ func TestBackend_HasSynced(t *testing.T) {
 	}
 
 	b := snapshot.NewInMemoryBuilder()
-	for typeURL := range st.mapping.collectionsToKinds {
+	for typeURL := range st.mapping.CollectionsToKinds {
 		b.SetVersion(typeURL, "0")
 
 	}
 	sn := b.Build()
 
-	st.updateWg.Add(len(st.mapping.collectionsToKinds))
+	st.updateWg.Add(len(st.mapping.CollectionsToKinds))
 	st.server.Cache.SetSnapshot(mixerNodeID, sn)
 	st.updateWg.Wait()
 
@@ -184,7 +185,7 @@ func TestBackend_List(t *testing.T) {
 	actual := st.backend.List()
 
 	expected := map[store.Key]*store.BackEndResource{
-		store.Key{
+		{
 			Name:      "e1",
 			Namespace: "ns1",
 			Kind:      constant.RulesKind,
@@ -199,7 +200,7 @@ func TestBackend_List(t *testing.T) {
 			},
 			Spec: map[string]interface{}{"match": "foo"},
 		},
-		store.Key{
+		{
 			Name:      "e2",
 			Namespace: "ns2",
 			Kind:      constant.RulesKind,
@@ -214,7 +215,7 @@ func TestBackend_List(t *testing.T) {
 			},
 			Spec: map[string]interface{}{"match": "bar"},
 		},
-		store.Key{
+		{
 			Name:      "e3",
 			Namespace: "",
 			Kind:      constant.RulesKind,

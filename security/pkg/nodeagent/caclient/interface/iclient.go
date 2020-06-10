@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,6 @@ import (
 
 // Client interface defines the clients need to implement to talk to CA for CSR.
 type Client interface {
-	CSRSign(ctx context.Context, csrPEM []byte, subjectID string,
+	CSRSign(ctx context.Context, reqID string, csrPEM []byte, subjectID string,
 		certValidTTLInSec int64) ([]string /*PEM-encoded certificate chain*/, error)
 }

@@ -1,4 +1,19 @@
 #!/bin/bash
+
+# Copyright Istio Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 #
 # Uses kubectl to collect cluster information.
 # Dumps:
@@ -115,7 +130,7 @@ mv_unless_max_exceeded() {
   local dst_file="${2}"
 
   file_size=$(wc -c "${src_file}" | awk '{print $1}')
-  local nsb=$(("${stored_log_bytes}" + "${file_size}"))
+  local nsb=$((stored_log_bytes + file_size))
 
   if (("${nsb}" > "${MAX_LOG_BYTES}")); then
     log "Not storing ${log_file} because appending its ${file_size} bytes would exceed max logged bytes ${MAX_LOG_BYTES}"
@@ -149,7 +164,8 @@ dump_logs_for_container() {
   local restart_count
   restart_count=$(kubectl get --namespace="${namespace}" \
       pod "${pod}" -o=jsonpath="${json_path}")
-  if [ "${restart_count}" -gt 0 ]; then
+  # (There will be no restart_count if the pod status is for example "Pending")
+  if [ -n "${restart_count}" ] && [ "${restart_count}" -gt 0 ]; then
     log "Retrieving previous logs for ${namespace}/${pod}/${container}"
 
     local log_previous_file
@@ -226,7 +242,7 @@ tap_containers() {
 }
 
 dump_kubernetes_resources() {
-  log "Retrieving kubernetes resource configurations"
+  log "Retrieving Kubernetes resource configurations"
 
   mkdir -p "${OUT_DIR}"
   # Only works in Kubernetes 1.8.0 and above.
@@ -236,7 +252,7 @@ dump_kubernetes_resources() {
 }
 
 dump_istio_custom_resource_definitions() {
-  log "Retrieving istio resource configurations"
+  log "Retrieving Istio resource configurations"
 
   local istio_resources
   # Trim to only first field; join by comma; remove last comma.
@@ -268,7 +284,7 @@ dump_pilot_url(){
   local dname=$3
   local outfile
 
-  outfile="${dname}/$(basename "${url}")"
+  outfile="${dname}/$(basename "${url}")-${pilot_pod}"
 
   log "Fetching ${url} from pilot"
   kubectl -n istio-system exec -i -t "${pilot_pod}" -c istio-proxy -- \
@@ -276,19 +292,21 @@ dump_pilot_url(){
 }
 
 dump_pilot() {
-  local pilot_pod
-  pilot_pod=$(kubectl -n istio-system get pods -l istio=pilot \
+  local pilot_pods
+  pilot_pods=$(kubectl -n istio-system get pods -l istio=pilot \
       -o jsonpath='{.items[*].metadata.name}')
 
-  if [ -n "${pilot_pod}" ]; then
+  if [ -n "${pilot_pods}" ]; then
     local pilot_dir="${OUT_DIR}/pilot"
     mkdir -p "${pilot_dir}"
-
-    dump_pilot_url "${pilot_pod}" debug/configz "${pilot_dir}"
-    dump_pilot_url "${pilot_pod}" debug/endpointz "${pilot_dir}"
-    dump_pilot_url "${pilot_pod}" debug/adsz "${pilot_dir}"
-    dump_pilot_url "${pilot_pod}" debug/authenticationz "${pilot_dir}"
-    dump_pilot_url "${pilot_pod}" metrics "${pilot_dir}"
+    for pilot_pod in ${pilot_pods}
+    do
+      dump_pilot_url "${pilot_pod}" debug/configz "${pilot_dir}"
+      dump_pilot_url "${pilot_pod}" debug/endpointz "${pilot_dir}"
+      dump_pilot_url "${pilot_pod}" debug/adsz "${pilot_dir}"
+      dump_pilot_url "${pilot_pod}" debug/authenticationz "${pilot_dir}"
+      dump_pilot_url "${pilot_pod}" metrics "${pilot_dir}"
+    done
   fi
 }
 

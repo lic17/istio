@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,22 +17,24 @@
 package crd
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/watch"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
 	"istio.io/istio/mixer/pkg/config/store"
-	"istio.io/istio/pkg/log"
-	"istio.io/istio/pkg/probe"
+	"istio.io/pkg/log"
+	"istio.io/pkg/probe"
 )
 
 const (
@@ -121,7 +123,7 @@ func (s *Store) checkAndCreateCaches(
 
 	resources, err := d.ServerResourcesForGroupVersion(groupVersion)
 	if err != nil {
-		log.Debugf("Failed to obtain resources for CRD: %v", err)
+		log.Warnf("Failed to obtain resources for CRD: %v", err)
 		return kinds
 	}
 	s.cacheMutex.Lock()
@@ -136,11 +138,10 @@ func (s *Store) checkAndCreateCaches(
 			informer := cache.NewSharedInformer(
 				&cache.ListWatch{
 					ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-						return cl.List(options)
+						return cl.List(context.TODO(), options)
 					},
-					WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-						options.Watch = true
-						return cl.Watch(options)
+					WatchFunc: func(options metav1.ListOptions) (w watch.Interface, err error) {
+						return cl.Watch(context.TODO(), options)
 					},
 				},
 				&unstructured.Unstructured{}, 0)
@@ -181,17 +182,18 @@ func (s *Store) Init(kinds []string) error {
 	s.informers = make(map[string]cache.SharedInformer, len(kinds))
 	remaining := s.checkAndCreateCaches(d, lwBuilder, kinds)
 	timeout := time.After(s.retryTimeout)
-	tick := time.Tick(s.retryInterval)
+	ticker := time.NewTicker(s.retryInterval)
+	defer ticker.Stop()
 	stopRetry := false
 	for len(s.extractCriticalKinds(remaining)) != 0 && !stopRetry {
 		select {
 		case <-timeout:
 			stopRetry = true
-		case <-tick:
+		case <-ticker.C:
 			remaining = s.checkAndCreateCaches(d, lwBuilder, remaining)
-		default:
 		}
 	}
+	ticker.Stop()
 	if len(remaining) > 0 {
 		if cks := s.extractCriticalKinds(remaining); len(cks) != 0 {
 			return fmt.Errorf("failed to discover critical kinds: %v", cks)

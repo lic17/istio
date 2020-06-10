@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -f mixer/adapter/zipkin/config/config.proto -i mixer/adapter/zipkin/config
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -f mixer/adapter/zipkin/config/config.proto -i mixer/adapter/zipkin/config
 
 // Package zipkin contains a tracespan adapter for Zipkin (https://zipkin.io/).
 package zipkin
@@ -20,12 +20,13 @@ package zipkin
 import (
 	"context"
 
+	oczipkin "contrib.go.opencensus.io/exporter/zipkin"
 	zgo "github.com/openzipkin/zipkin-go"
 	"github.com/openzipkin/zipkin-go/reporter"
 	zhttp "github.com/openzipkin/zipkin-go/reporter/http"
-	oczipkin "go.opencensus.io/exporter/zipkin"
 	"go.opencensus.io/trace"
 
+	"istio.io/istio/mixer/adapter/metadata"
 	"istio.io/istio/mixer/adapter/zipkin/config"
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/adapter/opencensus"
@@ -44,17 +45,11 @@ var _ tracespan.HandlerBuilder = &builder{}
 
 // GetInfo returns the Info associated with this adapter implementation.
 func GetInfo() adapter.Info {
-	return adapter.Info{
-		Name:        "zipkin",
-		Impl:        "istio.io/istio/mixer/adapter/zipkin",
-		Description: "Publishes traces to Zipkin.",
-		SupportedTemplates: []string{
-			tracespan.TemplateName,
-		},
-		DefaultConfig: &config.Params{},
-		NewBuilder: func() adapter.HandlerBuilder {
-			return &builder{}
-		}}
+	info := metadata.GetInfo("zipkin")
+	info.NewBuilder = func() adapter.HandlerBuilder {
+		return &builder{}
+	}
+	return info
 }
 
 func (b *builder) SetTraceSpanTypes(types map[string]*tracespan.Type) {

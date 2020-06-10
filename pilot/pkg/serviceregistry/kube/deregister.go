@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package kube
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -22,7 +23,7 @@ import (
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"istio.io/istio/pkg/log"
+	"istio.io/pkg/log"
 )
 
 // removeIPFromEndpoint verifies if the provided IP to deregister
@@ -66,9 +67,9 @@ func removeIPFromEndpoint(eps *v1.Endpoints, ip string) bool {
 // already exists) from Kubernetes. It creates or updates as needed.
 func DeRegisterEndpoint(client kubernetes.Interface, namespace string, svcName string,
 	ip string) error {
-	getOpt := meta_v1.GetOptions{IncludeUninitialized: true}
+	getOpt := meta_v1.GetOptions{}
 	var match bool
-	eps, err := client.CoreV1().Endpoints(namespace).Get(svcName, getOpt)
+	eps, err := client.CoreV1().Endpoints(namespace).Get(context.TODO(), svcName, getOpt)
 	if err != nil {
 		log.Errora("Endpoint not found for service ", svcName)
 		return err
@@ -83,7 +84,7 @@ func DeRegisterEndpoint(client kubernetes.Interface, namespace string, svcName s
 		log.Errora(err)
 		return err
 	}
-	eps, err = client.CoreV1().Endpoints(namespace).Update(eps)
+	eps, err = client.CoreV1().Endpoints(namespace).Update(context.TODO(), eps, meta_v1.UpdateOptions{})
 	if err != nil {
 		log.Errora("Update failed with: ", err)
 		return err

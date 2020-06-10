@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,12 +15,14 @@
 package configdump
 
 import (
-	"fmt"
 	"sort"
 	"time"
 
-	adminapi "github.com/envoyproxy/go-control-plane/envoy/admin/v2alpha"
-	proto "github.com/gogo/protobuf/types"
+	adminapi "github.com/envoyproxy/go-control-plane/envoy/admin/v3"
+	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	"github.com/golang/protobuf/ptypes"
+
+	v3 "istio.io/istio/pilot/pkg/proxy/envoy/v3"
 )
 
 // GetLastUpdatedDynamicRouteTime retrieves the LastUpdated timestamp of the
@@ -35,7 +37,7 @@ func (w *Wrapper) GetLastUpdatedDynamicRouteTime() (*time.Time, error) {
 	lastUpdated := time.Unix(0, 0) // get the oldest possible timestamp
 	for i := range drc {
 		if drc[i].LastUpdated != nil {
-			if drLastUpdated, err := proto.TimestampFromProto(drc[i].LastUpdated); err != nil {
+			if drLastUpdated, err := ptypes.Timestamp(drc[i].LastUpdated); err != nil {
 				return nil, err
 			} else if drLastUpdated.After(lastUpdated) {
 				lastUpdated = drLastUpdated
@@ -56,8 +58,39 @@ func (w *Wrapper) GetDynamicRouteDump(stripVersions bool) (*adminapi.RoutesConfi
 	}
 	drc := routeDump.GetDynamicRouteConfigs()
 	sort.Slice(drc, func(i, j int) bool {
-		return drc[i].RouteConfig.Name < drc[j].RouteConfig.Name
+		// Support v2 or v3 in config dump. See ads.go:RequestedTypes for more info.
+		r := &route.RouteConfiguration{}
+		drc[i].RouteConfig.TypeUrl = v3.RouteType
+		drc[j].RouteConfig.TypeUrl = v3.RouteType
+		err = ptypes.UnmarshalAny(drc[i].RouteConfig, r)
+		if err != nil {
+			return false
+		}
+		name := r.Name
+		err = ptypes.UnmarshalAny(drc[j].RouteConfig, r)
+		if err != nil {
+			return false
+		}
+		return name < r.Name
 	})
+
+	// In Istio 1.5, it is not enough just to sort the routes.  The virtual hosts
+	// within a route might have a different order.  Sort those too.
+	for i := range drc {
+		route := &route.RouteConfiguration{}
+		err = ptypes.UnmarshalAny(drc[i].RouteConfig, route)
+		if err != nil {
+			return nil, err
+		}
+		sort.Slice(route.VirtualHosts, func(i, j int) bool {
+			return route.VirtualHosts[i].Name < route.VirtualHosts[j].Name
+		})
+		drc[i].RouteConfig, err = ptypes.MarshalAny(route)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if stripVersions {
 		for i := range drc {
 			drc[i].VersionInfo = ""
@@ -69,14 +102,12 @@ func (w *Wrapper) GetDynamicRouteDump(stripVersions bool) (*adminapi.RoutesConfi
 
 // GetRouteConfigDump retrieves the route config dump from the ConfigDump
 func (w *Wrapper) GetRouteConfigDump() (*adminapi.RoutesConfigDump, error) {
-	// The route dump is the fourth one in the list.
-	// See https://www.envoyproxy.io/docs/envoy/latest/api-v2/admin/v2alpha/config_dump.proto
-	if len(w.Configs) < 4 {
-		return nil, fmt.Errorf("config dump has no route dump")
+	routeDumpAny, err := w.getSection(routes)
+	if err != nil {
+		return nil, err
 	}
-	routeDumpAny := w.Configs[3]
 	routeDump := &adminapi.RoutesConfigDump{}
-	err := proto.UnmarshalAny(&routeDumpAny, routeDump)
+	err = ptypes.UnmarshalAny(&routeDumpAny, routeDump)
 	if err != nil {
 		return nil, err
 	}

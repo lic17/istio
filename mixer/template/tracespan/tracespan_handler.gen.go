@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,30 +30,32 @@ import (
 //
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: tracespan
+// kind: instance
 // metadata:
 //   name: default
 //   namespace: istio-system
 // spec:
-//   traceId: request.headers["x-b3-traceid"]
-//   spanId: request.headers["x-b3-spanid"] | ""
-//   parentSpanId: request.headers["x-b3-parentspanid"] | ""
-//   spanName: request.path | "/"
-//   startTime: request.time
-//   endTime: response.time
-//   clientSpan: (context.reporter.local | true) == false
-//   rewriteClientSpanId: false
-//   spanTags:
-//     http.method: request.method | ""
-//     http.status_code: response.code | 200
-//     http.url: request.path | ""
-//     request.size: request.size | 0
-//     response.size: response.size | 0
-//     source.user: source.user | ""
-//     source.version: source.labels["version"] | ""
+//   compiledTemplate: tracespan
+//   params:
+//     traceId: request.headers["x-b3-traceid"]
+//     spanId: request.headers["x-b3-spanid"] | ""
+//     parentSpanId: request.headers["x-b3-parentspanid"] | ""
+//     spanName: request.path | "/"
+//     startTime: request.time
+//     endTime: response.time
+//     clientSpan: (context.reporter.kind | "inbound") == "outbound"
+//     rewriteClientSpanId: "false"
+//     spanTags:
+//       http.method: request.method | ""
+//       http.status_code: response.code | 200
+//       http.url: request.path | ""
+//       request.size: request.size | 0
+//       response.size: response.size | 0
+//       source.principal: source.principal | ""
+//       source.version: source.labels["version"] | ""
 // ```
 //
-// See also: [Distributed Tracing](https://istio.io/docs/tasks/telemetry/distributed-tracing/)
+// See also: [Distributed Tracing](https://istio.io/docs/tasks/observability/distributed-tracing/)
 // for information on tracing within Istio.
 
 // Fully qualified name of the template

@@ -1,4 +1,4 @@
-# Copyright 2017 Istio Authors
+# Copyright Istio Authors
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -15,12 +15,19 @@
 ##################################################################################################
 # Details service v2
 ##################################################################################################
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: details-v2
+  labels:
+    app: details
+    version: v2
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app: details
+      version: v2
   template:
     metadata:
       labels:
@@ -29,7 +36,7 @@ spec:
     spec:
       containers:
       - name: details
-        image: istio/examples-bookinfo-details-v2:1.10.1
+        image: docker.io/istio/examples-bookinfo-details-v2:1.16.1
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 9080

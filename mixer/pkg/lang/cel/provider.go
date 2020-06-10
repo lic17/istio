@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,12 +26,13 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
+	"github.com/google/cel-go/ext"
 	"github.com/google/cel-go/interpreter"
 	"github.com/google/cel-go/parser"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 
 	"istio.io/api/policy/v1beta1"
-	"istio.io/istio/mixer/pkg/attribute"
+	"istio.io/pkg/attribute"
 )
 
 // Attribute provider resolves typing information by modeling attributes
@@ -105,7 +106,7 @@ func (ap *attributeProvider) insert(n *node, words []string, valueType v1beta1.V
 
 func newAttributeProvider(attributes map[string]*v1beta1.AttributeManifest_AttributeInfo) *attributeProvider {
 	out := &attributeProvider{
-		protos:  types.NewProvider(),
+		protos:  types.NewRegistry(),
 		typeMap: make(map[string]*node),
 	}
 	out.root = out.newNode("")
@@ -115,7 +116,7 @@ func newAttributeProvider(attributes map[string]*v1beta1.AttributeManifest_Attri
 	return out
 }
 
-func (ap *attributeProvider) newEnvironment() celgo.Env {
+func (ap *attributeProvider) newEnvironment() *celgo.Env {
 	var declarations []*exprpb.Decl
 
 	// populate with root-level identifiers
@@ -133,6 +134,7 @@ func (ap *attributeProvider) newEnvironment() celgo.Env {
 		celgo.CustomTypeProvider(ap),
 		celgo.Declarations(declarations...),
 		celgo.Declarations(standardFunctions...),
+		ext.Strings(),
 		macros)
 
 	return env
@@ -154,36 +156,29 @@ func (ap *attributeProvider) FindType(typeName string) (*exprpb.Type, bool) {
 	}
 	return ap.protos.FindType(typeName)
 }
-func (ap *attributeProvider) FindFieldType(t *exprpb.Type, fieldName string) (*ref.FieldType, bool) {
-	switch v := t.TypeKind.(type) {
-	case *exprpb.Type_MessageType:
-		node, ok := ap.typeMap[v.MessageType]
-		if !ok {
-			break
-		}
-
-		child, ok := node.children[fieldName]
-		if !ok {
-			break
-		}
-
-		typ := child.typ
-		if typ == nil {
-			typ = decls.NewObjectType(child.typeName)
-		}
-
-		return &ref.FieldType{
-				Type:             typ,
-				SupportsPresence: true},
-			true
+func (ap *attributeProvider) FindFieldType(messageName, fieldName string) (*ref.FieldType, bool) {
+	node, ok := ap.typeMap[messageName]
+	if !ok {
+		return ap.protos.FindFieldType(messageName, fieldName)
 	}
-	return ap.protos.FindFieldType(t, fieldName)
+
+	child, ok := node.children[fieldName]
+	if !ok {
+		return nil, false
+	}
+
+	typ := child.typ
+	if typ == nil {
+		typ = decls.NewObjectType(child.typeName)
+	}
+
+	return &ref.FieldType{
+			Type:             typ,
+			SupportsPresence: true},
+		true
 }
 func (ap *attributeProvider) NewValue(typeName string, fields map[string]ref.Val) ref.Val {
 	return ap.protos.NewValue(typeName, fields)
-}
-func (ap *attributeProvider) RegisterType(types ...ref.Type) error {
-	return ap.RegisterType(types...)
 }
 
 // Attribute activation binds attribute values to the expression nodes
@@ -256,7 +251,7 @@ func (v value) IsSet(index ref.Val) ref.Val {
 	return types.True
 }
 
-func (a attributeActivation) ResolveName(name string) (ref.Val, bool) {
+func (a attributeActivation) ResolveName(name string) (interface{}, bool) {
 	if node, ok := a.provider.root.children[name]; ok {
 		return resolve(node, a.bag), true
 	}

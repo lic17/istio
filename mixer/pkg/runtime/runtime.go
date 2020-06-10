@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,14 +21,14 @@ import (
 
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/config/store"
-	"istio.io/istio/mixer/pkg/pool"
 	"istio.io/istio/mixer/pkg/runtime/config"
 	"istio.io/istio/mixer/pkg/runtime/dispatcher"
 	"istio.io/istio/mixer/pkg/runtime/handler"
 	"istio.io/istio/mixer/pkg/runtime/routing"
 	"istio.io/istio/mixer/pkg/template"
-	"istio.io/istio/pkg/log"
-	"istio.io/istio/pkg/probe"
+	"istio.io/pkg/log"
+	"istio.io/pkg/pool"
+	"istio.io/pkg/probe"
 )
 
 var errNotListening = errors.New("runtime is not listening to the store")
@@ -54,6 +54,8 @@ type Runtime struct {
 
 	*probe.Probe
 
+	namespaces []string
+
 	stateLock            sync.Mutex
 	shutdown             chan struct{}
 	waitQuiesceListening sync.WaitGroup
@@ -67,7 +69,8 @@ func New(
 	defaultConfigNamespace string,
 	executorPool *pool.GoroutinePool,
 	handlerPool *pool.GoroutinePool,
-	enableTracing bool) *Runtime {
+	enableTracing bool,
+	namespaces []string) *Runtime {
 
 	// Ignoring the errors for bad configuration that has already made it to the store.
 	// during snapshot creation the bad configuration errors are already logged.
@@ -81,6 +84,7 @@ func New(
 		handlerPool:            handlerPool,
 		Probe:                  probe.NewProbe(),
 		store:                  s,
+		namespaces:             namespaces,
 	}
 
 	// Make sure we have a stable state.
@@ -106,9 +110,7 @@ func (c *Runtime) StartListening() error {
 		return errors.New("already listening")
 	}
 
-	kinds := config.KindMap(c.snapshot.Adapters, c.snapshot.Templates)
-
-	data, watchChan, err := store.StartWatch(c.store, kinds)
+	data, watchChan, err := store.StartWatch(c.store)
 	if err != nil {
 		return err
 	}
@@ -150,11 +152,15 @@ func (c *Runtime) onConfigChange(events []*store.Event) {
 }
 
 func (c *Runtime) processNewConfig() {
-	newSnapshot, _ := c.ephemeral.BuildSnapshot()
+	newSnapshot, err := c.ephemeral.BuildSnapshot()
+	log.Infof("Built new config.Snapshot: id='%d'", newSnapshot.ID)
+	if err != nil {
+		log.Error(err.Error())
+	}
 
 	oldHandlers := c.handlers
 
-	newHandlers := handler.NewTable(oldHandlers, newSnapshot, c.handlerPool)
+	newHandlers := handler.NewTable(oldHandlers, newSnapshot, c.handlerPool, c.namespaces)
 
 	newRoutes := routing.BuildTable(
 		newHandlers, newSnapshot, c.defaultConfigNamespace, log.DebugEnabled())

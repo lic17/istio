@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,102 +23,150 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var probe = Probe{AdminPort: 1234}
+var (
+	liveServerStats = "cluster_manager.cds.update_success: 1\nlistener_manager.lds.update_success: 1\nserver.state: 0\nlistener_manager.workers_started: 1"
+	onlyServerStats = "server.state: 0"
+	initServerStats = "cluster_manager.cds.update_success: 1\nlistener_manager.lds.update_success: 1\nserver.state: 2"
+	noServerStats   = ""
+)
 
 func TestEnvoyStatsCompleteAndSuccessful(t *testing.T) {
 	g := NewGomegaWithT(t)
-	stats := "cluster_manager.cds.update_success: 1\nlistener_manager.lds.update_success: 1"
 
-	server := createAndStartServer(stats)
+	server := createAndStartServer(liveServerStats)
 	defer server.Close()
+	probe := Probe{AdminPort: 1234}
 
 	err := probe.Check()
 
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
-func TestEnvoyStatsIncompleteCDS(t *testing.T) {
-	g := NewGomegaWithT(t)
-	stats := "listener_manager.lds.update_success: 1"
+func TestEnvoyStats(t *testing.T) {
+	prefix := "config not received from Pilot (is Pilot running?): "
+	cases := []struct {
+		name   string
+		stats  string
+		result string
+	}{
+		{
+			"only lds",
+			"listener_manager.lds.update_success: 1",
+			prefix + "cds updates: 0 successful, 0 rejected; lds updates: 1 successful, 0 rejected",
+		},
+		{
+			"only cds",
+			"cluster_manager.cds.update_success: 1",
+			prefix + "cds updates: 1 successful, 0 rejected; lds updates: 0 successful, 0 rejected",
+		},
+		{
+			"reject CDS",
+			`cluster_manager.cds.update_rejected: 1
+listener_manager.lds.update_success: 1`,
+			prefix + "cds updates: 0 successful, 1 rejected; lds updates: 1 successful, 0 rejected",
+		},
+		{
+			"workers not started",
+			`
+cluster_manager.cds.update_success: 1
+listener_manager.lds.update_success: 1
+listener_manager.workers_started: 0
+server.state: 0`,
+			"workers have not yet started",
+		},
+		{
+			"full",
+			`
+cluster_manager.cds.update_success: 1
+listener_manager.lds.update_success: 1
+listener_manager.workers_started: 1
+server.state: 0`,
+			"",
+		},
+	}
 
-	server := createAndStartServer(stats)
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			server := createAndStartServer(tt.stats)
+			defer server.Close()
+			probe := Probe{AdminPort: 1234}
+
+			err := probe.Check()
+
+			// Expect no error
+			if tt.result == "" {
+				if err != nil {
+					t.Fatalf("Expected no error, got: %v", err)
+				}
+				return
+			}
+			// Expect error
+			if err.Error() != tt.result {
+				t.Fatalf("Expected: \n'%v', got: \n'%v'", tt.result, err.Error())
+			}
+		})
+	}
+}
+
+func TestEnvoyInitializing(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	server := createAndStartServer(initServerStats)
 	defer server.Close()
+	probe := Probe{AdminPort: 1234}
 
 	err := probe.Check()
 
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("cds updates: 0"))
 }
 
-func TestEnvoyStatsIncompleteLDS(t *testing.T) {
+func TestEnvoyNoClusterManagerStats(t *testing.T) {
 	g := NewGomegaWithT(t)
-	stats := "cluster_manager.cds.update_success: 1"
 
-	server := createAndStartServer(stats)
+	server := createAndStartServer(onlyServerStats)
 	defer server.Close()
+	probe := Probe{AdminPort: 1234}
 
 	err := probe.Check()
 
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("lds updates: 0"))
 }
 
-func TestEnvoyStatsCompleteAndRejectedCDS(t *testing.T) {
+func TestEnvoyNoServerStats(t *testing.T) {
 	g := NewGomegaWithT(t)
-	stats := "cluster_manager.cds.update_rejected: 1\nlistener_manager.lds.update_success: 1"
 
-	server := createAndStartServer(stats)
+	server := createAndStartServer(noServerStats)
 	defer server.Close()
-
-	err := probe.Check()
-
-	g.Expect(err).NotTo(HaveOccurred())
-}
-
-func TestEnvoyStatsCompleteAndRejectedLDS(t *testing.T) {
-	g := NewGomegaWithT(t)
-	stats := "cluster_manager.cds.update_success: 1\nlistener_manager.lds.update_rejected: 1"
-
-	server := createAndStartServer(stats)
-	defer server.Close()
-
-	err := probe.Check()
-
-	g.Expect(err).NotTo(HaveOccurred())
-}
-
-func TestEnvoyCheckFailsIfStatsUnparsableNoSeparator(t *testing.T) {
-	g := NewGomegaWithT(t)
-	stats := "cluster_manager.cds.update_success; 1\nlistener_manager.lds.update_success: 1"
-
-	server := createAndStartServer(stats)
-	defer server.Close()
+	probe := Probe{AdminPort: 1234}
 
 	err := probe.Check()
 
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("missing separator"))
 }
 
-func TestEnvoyCheckFailsIfStatsUnparsableNoNumber(t *testing.T) {
-	g := NewGomegaWithT(t)
-	stats := "cluster_manager.cds.update_success: a\nlistener_manager.lds.update_success: 1"
+func createDefaultFuncMap(statsToReturn string) map[string]func(rw http.ResponseWriter, _ *http.Request) {
+	return map[string]func(rw http.ResponseWriter, _ *http.Request){
 
-	server := createAndStartServer(stats)
-	defer server.Close()
-
-	err := probe.Check()
-
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("failed parsing Envoy stat"))
+		"/stats": func(rw http.ResponseWriter, _ *http.Request) {
+			// Send response to be tested
+			rw.Write([]byte(statsToReturn))
+		},
+	}
 }
 
 func createAndStartServer(statsToReturn string) *httptest.Server {
+	return createHTTPServer(createDefaultFuncMap(statsToReturn))
+}
+
+func createHTTPServer(handlers map[string]func(rw http.ResponseWriter, _ *http.Request)) *httptest.Server {
+	mux := http.NewServeMux()
+	for k, v := range handlers {
+		mux.HandleFunc(k, http.HandlerFunc(v))
+	}
+
 	// Start a local HTTP server
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		// Send response to be tested
-		rw.Write([]byte(statsToReturn))
-	}))
+	server := httptest.NewUnstartedServer(mux)
+
 	l, err := net.Listen("tcp", "127.0.0.1:1234")
 	if err != nil {
 		panic("Could not create listener for test: " + err.Error())

@@ -1,4 +1,4 @@
-// Copyright 2016 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,16 +28,14 @@ import (
 	"github.com/golang/protobuf/ptypes/empty"
 
 	adpTmpl "istio.io/api/mixer/adapter/model/v1beta1"
-	istio_mixer_v1_config "istio.io/api/policy/v1beta1"
 	pb "istio.io/api/policy/v1beta1"
 	"istio.io/istio/mixer/pkg/adapter"
-	"istio.io/istio/mixer/pkg/attribute"
-	"istio.io/istio/mixer/pkg/lang/ast"
 	"istio.io/istio/mixer/pkg/lang/checker"
 	istio_mixer_adapter_sample_myapa "istio.io/istio/mixer/template/sample/apa"
 	sample_check "istio.io/istio/mixer/template/sample/check"
 	sample_quota "istio.io/istio/mixer/template/sample/quota"
 	sample_report "istio.io/istio/mixer/template/sample/report"
+	"istio.io/pkg/attribute"
 )
 
 // Does not implement any template interfaces.
@@ -134,13 +132,6 @@ func (h *fakeQuotaHandler) SetQuotaTypes(t map[string]*sample_quota.Type) {
 }
 func (h *fakeQuotaHandler) Validate() *adapter.ConfigErrors     { return nil }
 func (h *fakeQuotaHandler) SetAdapterConfig(cfg adapter.Config) {}
-
-type fakeBag struct{}
-
-func (f fakeBag) Get(name string) (value interface{}, found bool) { return nil, false }
-func (f fakeBag) Names() []string                                 { return []string{} }
-func (f fakeBag) Done()                                           {}
-func (f fakeBag) String() string                                  { return "" }
 
 func TestGeneratedFields(t *testing.T) {
 	for _, tst := range []struct {
@@ -573,10 +564,8 @@ dimensions:
 				if !reflect.DeepEqual(v, tst.wantType) {
 					t.Errorf("InferType (%s) = \n%v, want \n%v", tst.name, spew.Sdump(v), spew.Sdump(tst.wantType))
 				}
-			} else {
-				if cerr == nil || !strings.Contains(cerr.Error(), tst.wantErr) {
-					t.Errorf("got error %v\nwant %v", cerr, tst.wantErr)
-				}
+			} else if cerr == nil || !strings.Contains(cerr.Error(), tst.wantErr) {
+				t.Errorf("got error %v\nwant %v", cerr, tst.wantErr)
 			}
 		})
 	}
@@ -660,10 +649,8 @@ res1:
 				if !reflect.DeepEqual(v, tst.wantType) {
 					t.Errorf("InferType (%s) = \n%v, want \n%v", tst.name, spew.Sdump(v), spew.Sdump(tst.wantType))
 				}
-			} else {
-				if cerr == nil || !strings.Contains(cerr.Error(), tst.wantErr) {
-					t.Errorf("got error %v\nwant %v", cerr, tst.wantErr)
-				}
+			} else if cerr == nil || !strings.Contains(cerr.Error(), tst.wantErr) {
+				t.Errorf("got error %v\nwant %v", cerr, tst.wantErr)
 			}
 		})
 	}
@@ -747,10 +734,8 @@ dimensions:
 				if !reflect.DeepEqual(v, tst.wantType) {
 					t.Errorf("InferType (%s) = \n%v, want \n%v", tst.name, spew.Sdump(v), spew.Sdump(tst.wantType))
 				}
-			} else {
-				if cerr == nil || !strings.Contains(cerr.Error(), tst.wantErr) {
-					t.Errorf("got error %v\nwant %v", cerr, tst.wantErr)
-				}
+			} else if cerr == nil || !strings.Contains(cerr.Error(), tst.wantErr) {
+				t.Errorf("got error %v\nwant %v", cerr, tst.wantErr)
 			}
 		})
 	}
@@ -808,11 +793,11 @@ func TestSetType(t *testing.T) {
 }
 
 type fakeExpr struct {
-	extraAttrManifest []*istio_mixer_v1_config.AttributeManifest
+	extraAttrManifest []*pb.AttributeManifest
 }
 
 // newFakeExpr returns the basic
-func newFakeExpr(extraAttrManifest []*istio_mixer_v1_config.AttributeManifest) *fakeExpr {
+func newFakeExpr(extraAttrManifest []*pb.AttributeManifest) *fakeExpr {
 	return &fakeExpr{extraAttrManifest: extraAttrManifest}
 }
 
@@ -820,9 +805,9 @@ func (e *fakeExpr) Eval(mapExpression string, attrs attribute.Bag) (interface{},
 	return nil, nil
 }
 
-var baseManifests = []*istio_mixer_v1_config.AttributeManifest{
+var baseManifests = []*pb.AttributeManifest{
 	{
-		Attributes: map[string]*istio_mixer_v1_config.AttributeManifest_AttributeInfo{
+		Attributes: map[string]*pb.AttributeManifest_AttributeInfo{
 			"str.absent": {
 				ValueType: pb.STRING,
 			},
@@ -872,8 +857,8 @@ var baseManifests = []*istio_mixer_v1_config.AttributeManifest{
 	},
 }
 
-func createAttributeDescriptorFinder(extraAttrManifest []*istio_mixer_v1_config.AttributeManifest) ast.AttributeDescriptorFinder {
-	attrs := make(map[string]*istio_mixer_v1_config.AttributeManifest_AttributeInfo)
+func createAttributeDescriptorFinder(extraAttrManifest []*pb.AttributeManifest) attribute.AttributeDescriptorFinder {
+	attrs := make(map[string]*pb.AttributeManifest_AttributeInfo)
 	for _, m := range baseManifests {
 		for an, at := range m.Attributes {
 			attrs[an] = at
@@ -884,7 +869,7 @@ func createAttributeDescriptorFinder(extraAttrManifest []*istio_mixer_v1_config.
 			attrs[an] = at
 		}
 	}
-	return ast.NewFinder(attrs)
+	return attribute.NewFinder(attrs)
 }
 
 // EvalPredicate evaluates given predicate using the attribute bag
@@ -892,8 +877,7 @@ func (e *fakeExpr) EvalPredicate(mapExpression string, attrs attribute.Bag) (boo
 	return true, nil
 }
 
-func (e *fakeExpr) EvalType(s string, af ast.AttributeDescriptorFinder) (pb.ValueType, error) {
-	//return pb.VALUE_TYPE_UNSPECIFIED, nil
+func (e *fakeExpr) EvalType(s string, af attribute.AttributeDescriptorFinder) (pb.ValueType, error) {
 	if i := af.GetAttribute(s); i != nil {
 		return i.ValueType, nil
 	}
@@ -901,7 +885,7 @@ func (e *fakeExpr) EvalType(s string, af ast.AttributeDescriptorFinder) (pb.Valu
 	return tc.EvalType(s)
 }
 
-func (e *fakeExpr) AssertType(string, ast.AttributeDescriptorFinder, pb.ValueType) error {
+func (e *fakeExpr) AssertType(string, attribute.AttributeDescriptorFinder, pb.ValueType) error {
 	return nil
 }
 
@@ -1044,24 +1028,11 @@ attribute_bindings:
 				if cv != nil {
 					t.Errorf("cv should be nil, there should be no type for apa instances")
 				}
-			} else {
-				if cerr == nil || !strings.Contains(cerr.Error(), tst.wantErr) {
-					t.Errorf("got error %v\nwant %v", cerr, tst.wantErr)
-				}
+			} else if cerr == nil || !strings.Contains(cerr.Error(), tst.wantErr) {
+				t.Errorf("got error %v\nwant %v", cerr, tst.wantErr)
 			}
 		})
 	}
-}
-
-func InterfaceSlice(slice interface{}) []interface{} {
-	s := reflect.ValueOf(slice)
-
-	ret := make([]interface{}, s.Len())
-	for i := 0; i < s.Len(); i++ {
-		ret[i] = s.Index(i).Interface()
-	}
-
-	return ret
 }
 
 // nolint: unparam

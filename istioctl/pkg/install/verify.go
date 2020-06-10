@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors.
+// Copyright Istio Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,37 +15,105 @@
 package install
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
+	appsv1 "k8s.io/api/apps/v1"
 	v1batch "k8s.io/api/batch/v1"
-	"k8s.io/api/extensions/v1beta1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	scheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/kubernetes/pkg/kubectl/genericclioptions"
-	"k8s.io/kubernetes/pkg/kubectl/genericclioptions/resource"
+	apimachinery_schema "k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/cli-runtime/pkg/resource"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes/scheme"
 
-	kube_meta "istio.io/istio/galley/pkg/metadata/kube"
+	"istio.io/istio/istioctl/pkg/clioptions"
+	operator_istio "istio.io/istio/operator/pkg/apis/istio"
+	"istio.io/istio/operator/pkg/apis/istio/v1alpha1"
+	"istio.io/istio/operator/pkg/controlplane"
+	"istio.io/istio/operator/pkg/translate"
+	"istio.io/istio/pilot/pkg/serviceregistry/kube/controller"
+	"istio.io/istio/pkg/config/schema"
 )
 
-func verifyInstall(restClientGetter resource.RESTClientGetter, options resource.FilenameOptions, writer io.Writer) error {
-	if len(options.Filenames) == 0 {
-		return errors.New("--filename must be set")
+var (
+	verifyInstallCmd *cobra.Command
+	istioOperatorGVR = apimachinery_schema.GroupVersionResource{
+		Group:    v1alpha1.SchemeGroupVersion.Group,
+		Version:  v1alpha1.SchemeGroupVersion.Version,
+		Resource: "istiooperators",
 	}
+)
+
+func verifyInstallIOPrevision(enableVerbose bool, istioNamespaceFlag string,
+	restClientGetter genericclioptions.RESTClientGetter,
+	writer io.Writer, opts clioptions.ControlPlaneOptions) error {
+
+	iop, err := operatorFromCluster(istioNamespaceFlag, opts.Revision, restClientGetter)
+	if err != nil {
+		return fmt.Errorf("could not load IstioOperator from cluster: %v.  Use --filename", err)
+	}
+	crdCount, istioDeploymentCount, err := verifyPostInstallIstioOperator(enableVerbose,
+		istioNamespaceFlag,
+		iop,
+		fmt.Sprintf("in cluster operator %s", iop.GetName()),
+		restClientGetter,
+		writer)
+	return show(crdCount, istioDeploymentCount, err, writer)
+}
+
+func verifyInstall(enableVerbose bool, istioNamespaceFlag string,
+	restClientGetter genericclioptions.RESTClientGetter, options resource.FilenameOptions,
+	writer io.Writer) error {
+
+	// This is not a pre-check.  Check that the supplied resources exist in the cluster
 	r := resource.NewBuilder(restClientGetter).
 		Unstructured().
 		FilenameParam(false, &options).
 		Flatten().
 		Do()
-	if err := r.Err(); err != nil {
+	if r.Err() != nil {
+		return r.Err()
+	}
+	visitor := genericclioptions.ResourceFinderForResult(r).Do()
+	crdCount, istioDeploymentCount, err := verifyPostInstall(enableVerbose,
+		istioNamespaceFlag,
+		visitor,
+		strings.Join(options.Filenames, ","),
+		restClientGetter,
+		writer)
+	return show(crdCount, istioDeploymentCount, err, writer)
+}
+
+func show(crdCount, istioDeploymentCount int, err error, writer io.Writer) error {
+	if err != nil {
 		return err
 	}
-	err := r.Visit(func(info *resource.Info, err error) error {
+	_, _ = fmt.Fprintf(writer, "Checked %v custom resource definitions\n", crdCount)
+	_, _ = fmt.Fprintf(writer, "Checked %v Istio Deployments\n", istioDeploymentCount)
+	if istioDeploymentCount == 0 {
+		_, _ = fmt.Fprintf(writer, "No Istio installation found\n")
+		return fmt.Errorf("no Istio installation found")
+	}
+	_, _ = fmt.Fprintf(writer, "Istio is installed successfully\n")
+	return nil
+}
+
+func verifyPostInstall(enableVerbose bool, istioNamespaceFlag string,
+	visitor resource.Visitor, filename string, restClientGetter genericclioptions.RESTClientGetter, writer io.Writer) (int, int, error) {
+	crdCount := 0
+	istioDeploymentCount := 0
+	err := visitor.Visit(func(info *resource.Info, err error) error {
+		if err != nil {
+			return err
+		}
 		content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(info.Object)
 		if err != nil {
 			return err
@@ -63,21 +131,24 @@ func verifyInstall(restClientGetter resource.RESTClientGetter, options resource.
 		}
 		switch kind {
 		case "Deployment":
-			deployment := &v1beta1.Deployment{}
+			deployment := &appsv1.Deployment{}
 			err = info.Client.
 				Get().
 				Resource(kinds).
 				Namespace(namespace).
 				Name(name).
 				VersionedParams(&meta_v1.GetOptions{}, scheme.ParameterCodec).
-				Do().
+				Do(context.TODO()).
 				Into(deployment)
 			if err != nil {
 				return err
 			}
-			err = getDeploymentStatus(deployment, name)
+			err = getDeploymentStatus(deployment, name, filename)
 			if err != nil {
 				return err
+			}
+			if namespace == istioNamespaceFlag && strings.HasPrefix(name, "istio-") {
+				istioDeploymentCount++
 			}
 		case "Job":
 			job := &v1batch.Job{}
@@ -87,42 +158,75 @@ func verifyInstall(restClientGetter resource.RESTClientGetter, options resource.
 				Namespace(namespace).
 				Name(name).
 				VersionedParams(&meta_v1.GetOptions{}, scheme.ParameterCodec).
-				Do().
+				Do(context.TODO()).
 				Into(job)
 			if err != nil {
 				return err
 			}
 			for _, c := range job.Status.Conditions {
-				switch c.Type {
-				case v1batch.JobFailed:
-					return fmt.Errorf("istio installation fails - the required Job  %s failed", name)
+				if c.Type == v1batch.JobFailed {
+					msg := fmt.Sprintf("Istio installation failed, incomplete or"+
+						" does not match \"%s\" - the required Job %s failed", filename, name)
+					return errors.New(msg)
 				}
 			}
+		case "IstioOperator":
+			// It is not a problem if the cluster does not include the IstioOperator
+			// we are checking.  Instead, verify the cluster has the things the
+			// IstioOperator specifies it should have.
+
+			// IstioOperator isn't part of pkg/config/schema/collections,
+			// usual conversion not available.  Convert unstructured to string
+			// and ask operator code to unmarshal.
+
+			un.SetCreationTimestamp(meta_v1.Time{}) // UnmarshalIstioOperator chokes on these
+			by, err := json.Marshal(un)
+			if err != nil {
+				return err
+			}
+
+			iop, err := operator_istio.UnmarshalIstioOperator(string(by))
+			if err != nil {
+				return err
+			}
+			generatedCrds, generatedDeployments, err := verifyPostInstallIstioOperator(enableVerbose, istioNamespaceFlag, iop, filename, restClientGetter, writer)
+			if err != nil {
+				return err
+			}
+			crdCount += generatedCrds
+			istioDeploymentCount += generatedDeployments
 		default:
 			result := info.Client.
 				Get().
 				Resource(kinds).
 				Name(name).
-				Do()
+				Do(context.TODO())
 			if result.Error() != nil {
 				result = info.Client.
 					Get().
 					Resource(kinds).
 					Namespace(namespace).
 					Name(name).
-					Do()
+					Do(context.TODO())
 				if result.Error() != nil {
-					return fmt.Errorf("istio installation fails or have not been completed - the required %s:%s is not ready due to: %v", kind, name, result.Error())
+					msg := fmt.Sprintf("Istio installation failed, incomplete or"+
+						" does not match \"%s\" - the required %s:%s is not ready due to: %v", filename, kind, name, result.Error())
+					return errors.New(msg)
 				}
 			}
+			if kind == "CustomResourceDefinition" {
+				crdCount++
+			}
+		}
+		if enableVerbose {
+			_, _ = fmt.Fprintf(writer, "%s: %s.%s checked successfully\n", kind, name, namespace)
 		}
 		return nil
 	})
 	if err != nil {
-		return err
+		return crdCount, istioDeploymentCount, err
 	}
-	fmt.Fprintf(writer, "istio is installed successfully\n")
-	return nil
+	return crdCount, istioDeploymentCount, nil
 }
 
 // NewVerifyCommand creates a new command for verifying Istio Installation Status
@@ -137,26 +241,62 @@ func NewVerifyCommand() *cobra.Command {
 		filenames     = []string{}
 		fileNameFlags = &genericclioptions.FileNameFlags{
 			Filenames: &filenames,
-			Recursive: boolPtr(true),
+			Recursive: boolPtr(false),
+			Usage:     "Istio YAML installation file.",
 		}
+		enableVerbose  bool
+		istioNamespace string
+		opts           clioptions.ControlPlaneOptions
 	)
-	verifyInstallCmd := &cobra.Command{
-		Use:   "verify-install",
-		Short: "Verifies Istio Installation Status",
+	verifyInstallCmd = &cobra.Command{
+		Use:   "verify-install [-f <deployment or istio operator file>] [--revision <revision>]",
+		Short: "Verifies Istio Installation Status or performs pre-check for the cluster before Istio installation",
 		Long: `
-		verify-install Verifies Istio Installation Status
+		verify-install verifies Istio installation status against the installation file
+		you specified when you installed Istio. It loops through all the installation
+		resources defined in your installation file and reports whether all of them are
+		in ready status. It will report failure when any of them are not ready.
+
+		If you do not specify installation file it will perform pre-check for your cluster
+		and report whether the cluster is ready for Istio installation.
 `,
 		Example: `
-istioctl verify-install -f istio-demo.yaml
+		# Verify that Istio can be freshly installed
+		istioctl verify-install
+
+		# Verify the deployment matches a custom Istio deployment configuration
+		istioctl verify-install -f $HOME/istio.yaml
+
+		# Verify the deployment matches the Istio Operator deployment definition
+		istioctl verify-install --revision <canary>
 `,
-		RunE: func(c *cobra.Command, _ []string) error {
-			return verifyInstall(kubeConfigFlags, fileNameFlags.ToOptions(), c.OutOrStderr())
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(fileNameFlags.ToOptions().Filenames) > 0 && opts.Revision != "" {
+				cmd.Println(cmd.UsageString())
+				return fmt.Errorf("supply either a file or revision, but not both")
+			}
+			return nil
+		},
+		RunE: func(c *cobra.Command, args []string) error {
+			// If the user did not specify a file, compare install to in-cluster IOP
+			if len(fileNameFlags.ToOptions().Filenames) == 0 {
+				return verifyInstallIOPrevision(enableVerbose, istioNamespace, kubeConfigFlags,
+					c.OutOrStderr(), opts)
+			}
+			// When the user specifies a file, compare against it.
+			return verifyInstall(enableVerbose, istioNamespace, kubeConfigFlags,
+				fileNameFlags.ToOptions(), c.OutOrStderr())
 		},
 	}
 
 	flags := verifyInstallCmd.PersistentFlags()
+	flags.StringVarP(&istioNamespace, "istioNamespace", "i", controller.IstioNamespace,
+		"Istio system namespace")
 	kubeConfigFlags.AddFlags(flags)
 	fileNameFlags.AddFlags(flags)
+	verifyInstallCmd.Flags().BoolVar(&enableVerbose, "enableVerbose", true,
+		"Enable verbose output")
+	opts.AttachControlPlaneFlags(verifyInstallCmd)
 	return verifyInstallCmd
 }
 
@@ -168,31 +308,35 @@ func boolPtr(val bool) *bool {
 	return &val
 }
 
-func getDeploymentStatus(deployment *v1beta1.Deployment, name string) error {
-	cond := getDeploymentCondition(deployment.Status, v1beta1.DeploymentProgressing)
+func getDeploymentStatus(deployment *appsv1.Deployment, name, fileName string) error {
+	cond := getDeploymentCondition(deployment.Status, appsv1.DeploymentProgressing)
 	if cond != nil && cond.Reason == "ProgressDeadlineExceeded" {
-		return fmt.Errorf("istio installation fails or have not been completed"+
-			" - deployment %q exceeded its progress deadline", name)
+		msg := fmt.Sprintf("Istio installation failed, incomplete or does not match \"%s\""+
+			" - deployment %q exceeded its progress deadline", fileName, name)
+		return errors.New(msg)
 	}
 	if deployment.Spec.Replicas != nil && deployment.Status.UpdatedReplicas < *deployment.Spec.Replicas {
-		return fmt.Errorf("istio installation fails or have not been completed"+
+		msg := fmt.Sprintf("Istio installation failed, incomplete or does not match \"%s\""+
 			" - waiting for deployment %q rollout to finish: %d out of %d new replicas have been updated",
-			name, deployment.Status.UpdatedReplicas, *deployment.Spec.Replicas)
+			fileName, name, deployment.Status.UpdatedReplicas, *deployment.Spec.Replicas)
+		return errors.New(msg)
 	}
 	if deployment.Status.Replicas > deployment.Status.UpdatedReplicas {
-		return fmt.Errorf("istio installation fails or have not been completed"+
+		msg := fmt.Sprintf("Istio installation failed, incomplete or does not match \"%s\""+
 			" - waiting for deployment %q rollout to finish: %d old replicas are pending termination",
-			name, deployment.Status.Replicas-deployment.Status.UpdatedReplicas)
+			fileName, name, deployment.Status.Replicas-deployment.Status.UpdatedReplicas)
+		return errors.New(msg)
 	}
 	if deployment.Status.AvailableReplicas < deployment.Status.UpdatedReplicas {
-		return fmt.Errorf("istio installation fails or have not been completed"+
+		msg := fmt.Sprintf("Istio installation failed, incomplete or does not match \"%s\""+
 			" - waiting for deployment %q rollout to finish: %d of %d updated replicas are available",
-			name, deployment.Status.AvailableReplicas, deployment.Status.UpdatedReplicas)
+			fileName, name, deployment.Status.AvailableReplicas, deployment.Status.UpdatedReplicas)
+		return errors.New(msg)
 	}
 	return nil
 }
 
-func getDeploymentCondition(status v1beta1.DeploymentStatus, condType v1beta1.DeploymentConditionType) *v1beta1.DeploymentCondition {
+func getDeploymentCondition(status appsv1.DeploymentStatus, condType appsv1.DeploymentConditionType) *appsv1.DeploymentCondition {
 	for i := range status.Conditions {
 		c := status.Conditions[i]
 		if c.Type == condType {
@@ -203,10 +347,116 @@ func getDeploymentCondition(status v1beta1.DeploymentStatus, condType v1beta1.De
 }
 
 func findResourceInSpec(kind string) string {
-	for _, spec := range kube_meta.Types.All() {
-		if spec.Kind == kind {
-			return spec.Plural
+	for _, c := range schema.MustGet().KubeCollections().All() {
+		if c.Resource().Kind() == kind {
+			return c.Resource().Plural()
 		}
 	}
 	return ""
+}
+
+// nolint: lll
+func verifyPostInstallIstioOperator(enableVerbose bool, istioNamespaceFlag string, iop *v1alpha1.IstioOperator, filename string, restClientGetter genericclioptions.RESTClientGetter, writer io.Writer) (int, int, error) {
+	// Generate the manifest this IstioOperator will make
+	t := translate.NewTranslator()
+
+	cp, err := controlplane.NewIstioControlPlane(iop.Spec, t)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := cp.Run(); err != nil {
+		return 0, 0, err
+	}
+
+	manifests, errs := cp.RenderManifest()
+	if errs != nil {
+		return 0, 0, errs.ToError()
+	}
+
+	builder := resource.NewBuilder(restClientGetter).Unstructured()
+	for cat, manifest := range manifests {
+		for i, manitem := range manifest {
+			reader := strings.NewReader(manitem)
+			pseudoFilename := fmt.Sprintf("%s:%d generated from %s", cat, i, filename)
+			builder = builder.Stream(reader, pseudoFilename)
+		}
+	}
+	r := builder.Flatten().Do()
+	if r.Err() != nil {
+		return 0, 0, r.Err()
+	}
+	visitor := genericclioptions.ResourceFinderForResult(r).Do()
+	// Indirectly RECURSE back into verifyPostInstall with the manifest we just generated
+	generatedCrds, generatedDeployments, err := verifyPostInstall(enableVerbose,
+		istioNamespaceFlag,
+		visitor,
+		fmt.Sprintf("generated from %s", filename),
+		restClientGetter,
+		writer)
+	if err != nil {
+		return generatedCrds, generatedDeployments, err
+	}
+
+	return generatedCrds, generatedDeployments, nil
+}
+
+// Find an IstioOperator matching revision in the cluster.  The IstioOperators
+// don't have a label for their revision, so we parse them and check .Spec.Revision
+func operatorFromCluster(istioNamespaceFlag string, revision string, restClientGetter genericclioptions.RESTClientGetter) (*v1alpha1.IstioOperator, error) {
+	restConfig, err := restClientGetter.ToRESTConfig()
+	if err != nil {
+		return nil, err
+	}
+	client, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		return nil, err
+	}
+	ul, err := client.
+		Resource(istioOperatorGVR).
+		Namespace(istioNamespaceFlag).
+		List(context.TODO(), meta_v1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	for _, un := range ul.Items {
+		un.SetCreationTimestamp(meta_v1.Time{}) // UnmarshalIstioOperator chokes on these
+		by, err := json.Marshal(un.Object)
+		if err != nil {
+			return nil, err
+		}
+
+		iop, err := operator_istio.UnmarshalIstioOperator(string(by))
+		if err != nil {
+			return nil, err
+		}
+		if iop.Spec.Revision == revision {
+			return iop, nil
+		}
+	}
+	return nil, fmt.Errorf("control plane revision %q not found", revision)
+}
+
+// Find all IstioOperator in the cluster.
+func allOperatorsInCluster(client dynamic.Interface) ([]*v1alpha1.IstioOperator, error) {
+	ul, err := client.
+		Resource(istioOperatorGVR).
+		List(context.TODO(), meta_v1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	retval := make([]*v1alpha1.IstioOperator, 0)
+	for _, un := range ul.Items {
+		un.SetCreationTimestamp(meta_v1.Time{}) // UnmarshalIstioOperator chokes on these
+		by, err := json.Marshal(un.Object)
+		if err != nil {
+			return nil, err
+		}
+
+		iop, err := operator_istio.UnmarshalIstioOperator(string(by))
+		if err != nil {
+			return nil, err
+		}
+		retval = append(retval, iop)
+	}
+	return retval, nil
 }

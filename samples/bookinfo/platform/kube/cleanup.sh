@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2017 Istio Authors
+# Copyright Istio Authors
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 SCRIPTDIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
 # only ask if in interactive mode
-if [[ -t 0 ]];then
+if [[ -t 0 && -z ${NAMESPACE} ]];then
   echo -n "namespace ? [default] "
   read -r NAMESPACE
 fi

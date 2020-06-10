@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,9 +20,13 @@ import (
 	"testing"
 	"time"
 
-	"istio.io/istio/mixer/pkg/pool"
+	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/runtime/config"
 	"istio.io/istio/mixer/pkg/runtime/testing/data"
+	"istio.io/istio/mixer/pkg/template"
+	"istio.io/pkg/pool"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Create a standard global config with Handler H1, Instance I1 and rule R1 referencing I1 and H1.
@@ -35,7 +39,7 @@ var globalCfgI2 = data.JoinConfigs(data.HandlerACheck1, data.InstanceCheck1, dat
 func TestNew_EmptyConfig(t *testing.T) {
 	s := config.Empty()
 
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 	e, found := table.Get(data.FqnACheck1)
 	if found {
 		t.Fatal("found")
@@ -52,7 +56,7 @@ func TestNew_EmptyOldTable(t *testing.T) {
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
 
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 	e, found := table.Get(data.FqnACheck1)
 	if !found {
 		t.Fatal("not found")
@@ -69,13 +73,13 @@ func TestNew_Reuse(t *testing.T) {
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
 
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 
 	// NewTable again using the same config, but add fault to the adapter to detect change.
 	adapters = data.BuildAdapters(nil, data.FakeAdapterSettings{Name: "tcheck", ErrorAtBuild: true})
 	s, _ = config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
 
-	table2 := NewTable(table, s, nil)
+	table2 := NewTable(table, s, nil, []string{metav1.NamespaceAll})
 
 	if len(table2.entries) != 1 {
 		t.Fatal("size")
@@ -92,12 +96,12 @@ func TestNew_NoReuse_DifferentConfig(t *testing.T) {
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
 
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 
 	// NewTable again using the slightly different config
 	s, _ = config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfgI2)
 
-	table2 := NewTable(table, s, nil)
+	table2 := NewTable(table, s, nil, []string{metav1.NamespaceAll})
 
 	if len(table2.entries) != 1 {
 		t.Fatal("size")
@@ -105,6 +109,42 @@ func TestNew_NoReuse_DifferentConfig(t *testing.T) {
 
 	if table2.entries[data.FqnACheck1] == table.entries[data.FqnACheck1] {
 		t.Fail()
+	}
+}
+
+func TestNew_NoReuse_DifferentConnectionConfig(t *testing.T) {
+	templates := map[string]*template.Info{}
+	adapters := map[string]*adapter.Info{}
+
+	// Load base dynamic config, which includes listentry template and listbackend adapter config
+	dynamicConfig, err := data.ReadConfigs("../../../template/listentry/template.yaml", "../../../test/listbackend/nosession.yaml")
+	dynamicConfig = data.JoinConfigs(dynamicConfig, data.InstanceDynamic, data.RuleDynamic)
+
+	// Join base dynamic config with dynamic handler
+	config1 := data.JoinConfigs(dynamicConfig, data.ListHandler3)
+	if err != nil {
+		t.Fatalf("fail to load dynamic config: %v", err)
+	}
+	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, config1)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
+
+	if len(table.entries) != 1 {
+		t.Fatalf("got %v entries in route table, want 1", len(table.entries))
+	}
+
+	// Join base dynamic config with dynamic handler which has different connection address
+	config2 := data.JoinConfigs(dynamicConfig, data.ListHandler3Addr)
+	// NewTable again using the slightly different config
+	s, _ = config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, config2)
+
+	table2 := NewTable(table, s, nil, []string{metav1.NamespaceAll})
+
+	if len(table2.entries) != 1 {
+		t.Fatalf("got %v entries in route table, want 1", len(table2.entries))
+	}
+
+	if table2.entries[data.FqdnListHandler3] == table.entries[data.FqdnListHandler3] {
+		t.Fatalf("got same entry %+v in route table after handler config change, want different entries", table2.entries[data.FqdnListHandler3])
 	}
 }
 
@@ -154,11 +194,11 @@ func TestCleanup_Basic(t *testing.T) {
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
 
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 
 	s = config.Empty()
 
-	table2 := NewTable(table, s, nil)
+	table2 := NewTable(table, s, nil, []string{metav1.NamespaceAll})
 
 	table.Cleanup(table2)
 
@@ -225,7 +265,9 @@ func TestCleanup_WorkerNotClosed(t *testing.T) {
 			s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
 			s.ID = int64(idx * 2)
 
-			oldTable := NewTable(Empty(), s, pool.NewGoroutinePool(5, false))
+			gp := pool.NewGoroutinePool(5, false)
+			gp.AddWorkers(5)
+			oldTable := NewTable(Empty(), s, gp, []string{metav1.NamespaceAll})
 			oldTable.strayWorkersRetryDuration = 5 * time.Millisecond
 
 			s = config.Empty()
@@ -234,7 +276,7 @@ func TestCleanup_WorkerNotClosed(t *testing.T) {
 			// by 2 and adding 1, give unique ids per iteration [(0,1), (1,2), ...]
 			s.ID = int64(idx*2 + 1)
 
-			newTable := NewTable(oldTable, s, nil)
+			newTable := NewTable(oldTable, s, nil, []string{metav1.NamespaceAll})
 
 			oldTable.Cleanup(newTable)
 
@@ -261,10 +303,10 @@ func TestCleanup_NoChange(t *testing.T) {
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
 
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 
 	// use same config again.
-	table2 := NewTable(table, s, nil)
+	table2 := NewTable(table, s, nil, []string{metav1.NamespaceAll})
 
 	table.Cleanup(table2)
 
@@ -290,7 +332,7 @@ func TestCleanup_EmptyNewTable(t *testing.T) {
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
 
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 
 	// Use an empty table as current.
 	table.Cleanup(Empty())
@@ -302,14 +344,14 @@ func TestCleanup_WithStartupError(t *testing.T) {
 	templates := data.BuildTemplates(nil, data.FakeTemplateSettings{Name: "tcheck", HandlerDoesNotSupportTemplate: true})
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 
 	if _, found := table.Get(data.FqnACheck1); found {
 		t.Fail()
 	}
 
 	// use different config to force cleanup
-	table2 := NewTable(table, config.Empty(), nil)
+	table2 := NewTable(table, config.Empty(), nil, []string{metav1.NamespaceAll})
 
 	table.Cleanup(table2)
 
@@ -325,10 +367,10 @@ func TestCleanup_CloseError(t *testing.T) {
 	templates := data.BuildTemplates(nil)
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 
 	// use different config to force cleanup
-	table2 := NewTable(table, config.Empty(), nil)
+	table2 := NewTable(table, config.Empty(), nil, []string{metav1.NamespaceAll})
 
 	table.Cleanup(table2)
 
@@ -360,10 +402,10 @@ func TestCleanup_ClosePanic(t *testing.T) {
 	templates := data.BuildTemplates(nil)
 
 	s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, globalCfg)
-	table := NewTable(Empty(), s, nil)
+	table := NewTable(Empty(), s, nil, []string{metav1.NamespaceAll})
 
 	// use different config to force cleanup
-	table2 := NewTable(table, config.Empty(), nil)
+	table2 := NewTable(table, config.Empty(), nil, []string{metav1.NamespaceAll})
 
 	table.Cleanup(table2)
 

@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,16 +23,18 @@ syntax = "proto3";
 // 
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: quota
+// kind: instance
 // metadata:
 //   name: requestcount
 //   namespace: istio-system
 // spec:
-//   dimensions:
-//     source: source.labels["app"] | source.service | "unknown"
-//     sourceVersion: source.labels["version"] | "unknown"
-//     destination: destination.labels["app"] | destination.service | "unknown"
-//     destinationVersion: destination.labels["version"] | "unknown"
+//   compiledTemplate: quota
+//   params:
+//     dimensions:
+//       source: source.name | "unknown"
+//       sourceVersion: source.labels["version"] | "unknown"
+//       destination: destination.labels["app"] | destination.service.host | "unknown"
+//       destinationVersion: destination.labels["version"] | "unknown"
 // ```
 //
 // The `quota` template represents a piece of data to check Quota for.
@@ -56,6 +58,7 @@ option (istio.mixer.adapter.model.v1beta1.template_name) = "quota";
 option (gogoproto.goproto_getters_all) = false;
 option (gogoproto.equal_all) = false;
 option (gogoproto.gostring_all) = false;
+option (gogoproto.stable_marshaler_all) = true;
 
 // HandleQuotaService is implemented by backends that wants to handle request-time 'quota' instances.
 service HandleQuotaService {

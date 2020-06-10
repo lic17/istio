@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,18 +17,27 @@ package util
 import (
 	"errors"
 	"io/ioutil"
-	"os"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/pmezard/go-difflib/difflib"
+
+	"istio.io/pkg/env"
+)
+
+const (
+	statusReplacement = "sidecar.istio.io/status: '{\"version\":\"\","
+)
+
+var (
+	statusPattern = regexp.MustCompile("sidecar.istio.io/status: '{\"version\":\"([0-9a-f]+)\",")
 )
 
 // Refresh controls whether to update the golden artifacts instead.
 // It is set using the environment variable REFRESH_GOLDEN.
 func Refresh() bool {
-	v, exists := os.LookupEnv("REFRESH_GOLDEN")
-	return exists && v == "true"
+	return env.RegisterBoolVar("REFRESH_GOLDEN", false, "").Get()
 }
 
 // Compare compares two byte slices. It returns an error with a
@@ -92,6 +101,11 @@ func ReadGoldenFile(content []byte, goldenFile string, t *testing.T) []byte {
 	return ReadFile(goldenFile, t)
 }
 
+// StripVersion strips the version fields of a YAML content.
+func StripVersion(yaml []byte) []byte {
+	return statusPattern.ReplaceAllLiteral(yaml, []byte(statusReplacement))
+}
+
 // RefreshGoldenFile updates the golden file with the given content
 func RefreshGoldenFile(content []byte, goldenFile string, t *testing.T) {
 	if Refresh() {
@@ -103,7 +117,7 @@ func RefreshGoldenFile(content []byte, goldenFile string, t *testing.T) {
 }
 
 // ReadFile reads the content of the given file or fails the test if an error is encountered.
-func ReadFile(file string, t *testing.T) []byte {
+func ReadFile(file string, t testing.TB) []byte {
 	t.Helper()
 	golden, err := ioutil.ReadFile(file)
 	if err != nil {

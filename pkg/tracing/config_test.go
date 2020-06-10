@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ import (
 	ot "github.com/opentracing/opentracing-go"
 	"github.com/uber/jaeger-client-go/transport/zipkin"
 
-	"istio.io/istio/pkg/log"
+	"istio.io/pkg/log"
 )
 
 func TestConfigure(t *testing.T) {

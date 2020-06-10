@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ func (ca *mockCAServer) CreateCertificate(ctx context.Context, in *pb.IstioCerti
 	return nil, ca.Err
 }
 
-func TestGoogleCAClient(t *testing.T) {
+func TestCitadelClient(t *testing.T) {
 	testCases := map[string]struct {
 		server       mockCAServer
 		expectedCert []string
@@ -81,19 +81,19 @@ func TestGoogleCAClient(t *testing.T) {
 		go func() {
 			pb.RegisterIstioCertificateServiceServer(s, &tc.server)
 			if err := s.Serve(lis); err != nil {
-				t.Fatalf("Test case [%s]: failed to serve: %v", id, err)
+				t.Logf("Test case [%s]: failed to serve: %v", id, err)
 			}
 		}()
 
 		// The goroutine starting the server may not be ready, results in flakiness.
 		time.Sleep(1 * time.Second)
 
-		cli, err := NewCitadelClient(lis.Addr().String(), false, nil)
+		cli, err := NewCitadelClient(lis.Addr().String(), false, nil, "")
 		if err != nil {
 			t.Errorf("Test case [%s]: failed to create ca client: %v", id, err)
 		}
 
-		resp, err := cli.CSRSign(context.Background(), []byte{01}, fakeToken, 1)
+		resp, err := cli.CSRSign(context.Background(), "12345678-1234-1234-1234-123456789012", []byte{01}, fakeToken, 1)
 		if err != nil {
 			if err.Error() != tc.expectedErr {
 				t.Errorf("Test case [%s]: error (%s) does not match expected error (%s)", id, err.Error(), tc.expectedErr)

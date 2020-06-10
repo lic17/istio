@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,17 +15,17 @@
 package proto
 
 import (
-	"github.com/gogo/protobuf/types"
+	"github.com/golang/protobuf/ptypes/wrappers"
 )
 
 var (
 	// BoolTrue is a bool true pointer of types.BoolValue.
-	BoolTrue = &types.BoolValue{
+	BoolTrue = &wrappers.BoolValue{
 		Value: true,
 	}
 
 	// BoolFalse is a bool false pointer of types.BoolValue.
-	BoolFalse = &types.BoolValue{
+	BoolFalse = &wrappers.BoolValue{
 		Value: false,
 	}
 )

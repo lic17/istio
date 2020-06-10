@@ -25,13 +25,15 @@ import time
 
 from jwcrypto import jwt, jwk
 
+
 def main(args):
     """Generates a signed JSON Web Token from local private key."""
     with open(args.key) as f:
         pem_data = f.read()
     f.closed
 
-    key = jwk.JWK.from_pem(pem_data)
+    pem_data_encode = pem_data.encode("utf-8")
+    key = jwk.JWK.from_pem(pem_data_encode)
 
     if args.jwks:
         with open(args.jwks, "w+") as fout:
@@ -66,13 +68,13 @@ def main(args):
 
     if args.listclaim:
         for item in args.listclaim:
-            if (len(item)>1):
+            if (len(item) > 1):
                 k = item[0]
                 v = item[1:]
                 payload[k] = v
 
     token = jwt.JWT(header={"alg": "RS256", "typ": "JWT", "kid": key.key_id},
-                claims=payload)
+                    claims=payload)
 
     token.make_signed_token(key)
 
@@ -96,11 +98,15 @@ if __name__ == '__main__':
     parser.add_argument("-sub", "--sub",
                         help="sub claim. If not provided, it is set to the same as iss claim.")
     parser.add_argument("-claims", "--claims",
-                         help="Other claims in format name1:value1,name2:value2 etc. Only string values are supported.")
+                        help="Other claims in format name1:value1,name2:value2 etc. Only string values are supported.")
     parser.add_argument("-jwks", "--jwks",
-                         help="Path to the output file for JWKS.")
+                        help="Path to the output file for JWKS.")
     parser.add_argument("-expire", "--expire", type=int, default=3600,
-                         help="JWT expiration time in second. Default is 1 hour.")
-    parser.add_argument("-listclaim", "--listclaim", action='append', nargs='+',
-                        help="A list claim in format key1 value2 value3... Only string values are supported. Multiple list claims can be specified, e.g., -listclaim key1 val2 val3 -listclaim key2 val3 val4.")
+                        help="JWT expiration time in second. Default is 1 hour.")
+    parser.add_argument(
+        "-listclaim",
+        "--listclaim",
+        action='append',
+        nargs='+',
+        help="A list claim in format key1 value2 value3... Only string values are supported. Multiple list claims can be specified, e.g., -listclaim key1 val2 val3 -listclaim key2 val3 val4.")
     print(main(parser.parse_args()))

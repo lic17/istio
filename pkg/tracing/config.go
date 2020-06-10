@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ import (
 	zk "github.com/uber/jaeger-client-go/zipkin"
 	"go.uber.org/zap"
 
-	"istio.io/istio/pkg/log"
+	"istio.io/pkg/log"
 )
 
 /* TODO:
@@ -133,9 +133,9 @@ func configure(serviceName string, options *Options, nz newZipkin) (io.Closer, e
 		zipkinPropagator := zk.NewZipkinB3HTTPHeaderPropagator()
 		injector := jaeger.TracerOptions.Injector(ot.HTTPHeaders, zipkinPropagator)
 		extractor := jaeger.TracerOptions.Extractor(ot.HTTPHeaders, zipkinPropagator)
-		tracer, closer = jaeger.NewTracer(serviceName, sampler, rep, poolSpans, injector, extractor)
+		tracer, closer = jaeger.NewTracer(serviceName, sampler, rep, poolSpans, injector, extractor, jaeger.TracerOptions.Gen128Bit(true))
 	} else {
-		tracer, closer = jaeger.NewTracer(serviceName, sampler, rep, poolSpans)
+		tracer, closer = jaeger.NewTracer(serviceName, sampler, rep, poolSpans, jaeger.TracerOptions.Gen128Bit(true))
 	}
 
 	// NOTE: global side effect!

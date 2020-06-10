@@ -1,4 +1,4 @@
-// Copyright 2019 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -85,7 +85,7 @@ func TestClientSource(t *testing.T) {
 		Resources:  []*mcp.Resource{test.Type2A[0].Resource},
 	})
 
-	h.requestsChan <- test.MakeRequest(false, "", "", codes.Unimplemented)
+	h.requestsChan <- test.MakeRequest(false, triggerCollection, "", codes.Unimplemented)
 	h.requestsChan <- test.MakeRequest(false, test.FakeType0Collection, "", codes.OK)
 	h.requestsChan <- test.MakeRequest(false, test.FakeType1Collection, "", codes.OK)
 	h.requestsChan <- test.MakeRequest(false, test.FakeType2Collection, "", codes.OK)
@@ -122,11 +122,6 @@ func TestClientSource(t *testing.T) {
 	h.setOpenError(nil)
 	h.client = true
 	h.requestsChan <- test.MakeRequest(false, "", "", codes.OK)
-	proceed <- true
-
-	<-waiting
-	h.client = true
-	h.requestsChan <- test.MakeRequest(false, "", "", codes.InvalidArgument)
 	proceed <- true
 
 	<-waiting

@@ -14,34 +14,35 @@ number_of_entries: 1
 
 <p>When writing the configuration, the value for the fields associated
 with this template can either be a literal or an
-<a href="https://istio.io/docs/reference/config/mixer/expression-language.html">expression</a>. Please
+<a href="https://istio.io/docs/reference/config/policy-and-telemetry/expression-language/">expression</a>. Please
 note that if the datatype of a field is not
 istio.mixer.adapter.model.v1beta1.Value, then the expression&rsquo;s
-<a href="https://istio.io/docs/reference/config/policy-and-telemetry/expression-language/#type-checking">inferred
-type</a>
+<a href="https://istio.io/docs/reference/config/policy-and-telemetry/expression-language/#type-checking">inferred type</a>
 must match the datatype of the field.</p>
 
 <p>Example config:</p>
 
 <pre><code class="language-yaml">apiVersion: &quot;config.istio.io/v1alpha2&quot;
-kind: edge
+kind: instance
 metadata:
   name: default
   namespace: istio-system
 spec:
-  timestamp: request.time
-  sourceUid: source.uid | &quot;Unknown&quot;
-  sourceOwner: source.owner | &quot;Unknown&quot;
-  sourceWorkloadName: source.workload.name | &quot;Unknown&quot;
-  sourceWorkloadNamespace: source.workload.namespace | &quot;Unknown&quot;
-  destinationUid: destination.uid | &quot;Unknown&quot;
-  destinationOwner: destination.owner | &quot;Unknown&quot;
-  destinationWorkloadName: destination.workload.name | &quot;Unknown&quot;
-  destinationWorkloadNamespace: destination.workload.namespace | &quot;Unknown&quot;
-  destinationServiceName: destination.service.name | &quot;Unknown&quot;
-  destinationServiceNamespace: destination.service.namespace | &quot;Unknown&quot;
-  apiProtocol: api.protocol | &quot;Unknown&quot;
-  contextProtocol: context.protocol | &quot;Unknown&quot;
+  compiledTemplate: edge
+  params:
+    timestamp: request.time
+    sourceUid: source.uid | &quot;Unknown&quot;
+    sourceOwner: source.owner | &quot;Unknown&quot;
+    sourceWorkloadName: source.workload.name | &quot;Unknown&quot;
+    sourceWorkloadNamespace: source.workload.namespace | &quot;Unknown&quot;
+    destinationUid: destination.uid | &quot;Unknown&quot;
+    destinationOwner: destination.owner | &quot;Unknown&quot;
+    destinationWorkloadName: destination.workload.name | &quot;Unknown&quot;
+    destinationWorkloadNamespace: destination.workload.namespace | &quot;Unknown&quot;
+    destinationServiceName: destination.service.name | &quot;Unknown&quot;
+    destinationServiceNamespace: destination.service.namespace | &quot;Unknown&quot;
+    apiProtocol: api.protocol | &quot;Unknown&quot;
+    contextProtocol: context.protocol | &quot;Unknown&quot;
 </code></pre>
 
 <table class="message-fields">
@@ -50,15 +51,19 @@ spec:
 <th>Field</th>
 <th>Type</th>
 <th>Description</th>
+<th>Required</th>
 </tr>
 </thead>
 <tbody>
 <tr id="Template-timestamp">
 <td><code>timestamp</code></td>
-<td><code><a href="https://istio.io/docs/reference/config/policy-and-telemetry/istio.policy.v1beta1.html#TimeStamp">istio.policy.v1beta1.TimeStamp</a></code></td>
+<td><code><a href="https://istio.io/docs/reference/config/policy-and-telemetry/istio.policy.v1beta1.html#TimeStamp">TimeStamp</a></code></td>
 <td>
 <p>Timestamp of the edge</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 <tr id="Template-source_workload_namespace">
@@ -68,6 +73,9 @@ spec:
 <p>Namespace of the source workload</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Template-source_workload_name">
 <td><code>sourceWorkloadName</code></td>
@@ -75,6 +83,9 @@ spec:
 <td>
 <p>Name of the source workload</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 <tr id="Template-source_owner">
@@ -84,6 +95,9 @@ spec:
 <p>Owner of the source workload (often k8s deployment)</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Template-source_uid">
 <td><code>sourceUid</code></td>
@@ -91,6 +105,9 @@ spec:
 <td>
 <p>UID of the source workload</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 <tr id="Template-destination_workload_namespace">
@@ -100,6 +117,9 @@ spec:
 <p>Namespace of the destination workload</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Template-destination_workload_name">
 <td><code>destinationWorkloadName</code></td>
@@ -107,6 +127,9 @@ spec:
 <td>
 <p>Name of the destination workload</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 <tr id="Template-destination_owner">
@@ -116,6 +139,9 @@ spec:
 <p>Owner of the destination workload (often k8s deployment)</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Template-destination_uid">
 <td><code>destinationUid</code></td>
@@ -123,6 +149,9 @@ spec:
 <td>
 <p>UID of the destination workload</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 <tr id="Template-destination_service_namespace">
@@ -132,6 +161,9 @@ spec:
 <p>Namespace of the destination Service</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Template-destination_service_name">
 <td><code>destinationServiceName</code></td>
@@ -139,6 +171,9 @@ spec:
 <td>
 <p>Name of the destination Service</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 <tr id="Template-context_protocol">
@@ -148,6 +183,9 @@ spec:
 <p>Protocol used for communication (http, tcp)</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Template-api_protocol">
 <td><code>apiProtocol</code></td>
@@ -155,6 +193,9 @@ spec:
 <td>
 <p>The protocol type of the API call (http, https, grpc)</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 </tbody>

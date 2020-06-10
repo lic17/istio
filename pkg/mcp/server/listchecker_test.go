@@ -1,4 +1,4 @@
-//  Copyright 2018 Istio Authors
+//  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -28,14 +28,13 @@ import (
 func TestListAuthChecker(t *testing.T) {
 	testCases := []struct {
 		name         string
-		mode         AuthListMode
 		authInfo     credentials.AuthInfo
 		extractIDsFn func(exts []pkix.Extension) ([]string, error)
 		err          string
-		remove       bool // Remove the added entry
-		set          bool // Use set to add the entry
 		ids          []string
 		allowed      []string
+		mode         AuthListMode
+		remove       bool // Remove the added entry
 	}{
 		{
 			name:     "nil",
@@ -224,10 +223,10 @@ func (a *authInfo) AuthType() string {
 
 func TestListAuthChecker_Allowed(t *testing.T) {
 	cases := []struct {
-		mode   AuthListMode
 		id     string
 		testid string
 		expect bool
+		mode   AuthListMode
 	}{
 		{mode: AuthBlackList, testid: "foo", expect: true},
 		{mode: AuthBlackList, id: "foo", testid: "foo", expect: false},

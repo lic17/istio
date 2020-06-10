@@ -1,4 +1,4 @@
-//  Copyright 2018 Istio Authors
+//  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -14,23 +14,29 @@
 
 package policy
 
-//go:generate $GOPATH/src/istio.io/istio/bin/protoc.sh --gogo_out=plugins=grpc:. controller.proto
+//nolint: lll
+//go:generate $REPO_ROOT/bin/protoc.sh --gogoslick_out=plugins=grpc,Mgoogle/protobuf/any.proto=github.com/gogo/protobuf/types:. -I. controller.proto
 
 import (
 	"context"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
-	google_rpc "github.com/gogo/googleapis/google/rpc"
+	types "github.com/gogo/protobuf/types"
 	"github.com/golang/protobuf/proto"
 	"google.golang.org/grpc"
 
+	google_rpc "istio.io/gogo-genproto/googleapis/google/rpc"
+
 	"istio.io/api/mixer/adapter/model/v1beta1"
-	istio_mixer_adapter_model_v1beta11 "istio.io/api/mixer/adapter/model/v1beta1"
+	policy "istio.io/api/policy/v1beta1"
+	"istio.io/istio/mixer/pkg/status"
 	"istio.io/istio/mixer/template/checknothing"
 	"istio.io/istio/mixer/template/metric"
-	"istio.io/istio/pkg/log"
+	"istio.io/istio/mixer/test/keyval"
+	"istio.io/pkg/log"
 )
 
 const (
@@ -55,6 +61,7 @@ type Backend struct {
 
 var _ metric.HandleMetricServiceServer = &Backend{}
 var _ checknothing.HandleCheckNothingServiceServer = &Backend{}
+var _ keyval.HandleKeyvalServiceServer = &Backend{}
 
 var _ v1beta1.InfrastructureBackendServer = &Backend{}
 
@@ -88,6 +95,7 @@ func (b *Backend) Start() error {
 	v1beta1.RegisterInfrastructureBackendServer(grpcServer, b)
 	metric.RegisterHandleMetricServiceServer(grpcServer, b)
 	checknothing.RegisterHandleCheckNothingServiceServer(grpcServer, b)
+	keyval.RegisterHandleKeyvalServiceServer(grpcServer, b)
 	RegisterControllerServiceServer(grpcServer, b)
 
 	go func() {
@@ -193,7 +201,7 @@ func (b *Backend) CloseSession(ctx context.Context, req *v1beta1.CloseSessionReq
 
 // HandleMetric is an implementation HandleMetricServiceServer.HandleMetric.
 func (b *Backend) HandleMetric(ctx context.Context, req *metric.HandleMetricRequest) (
-	*istio_mixer_adapter_model_v1beta11.ReportResult, error) {
+	*v1beta1.ReportResult, error) {
 	scope.Infof("Backend.HandleMetric %v", req)
 
 	b.lock.Lock()
@@ -202,19 +210,26 @@ func (b *Backend) HandleMetric(ctx context.Context, req *metric.HandleMetricRequ
 		b.reports = append(b.reports, ins)
 	}
 
-	return &istio_mixer_adapter_model_v1beta11.ReportResult{}, nil
+	return &v1beta1.ReportResult{}, nil
 }
 
 // HandleCheckNothing is an implementation of HandleCheckNothingServiceServer.HandleCheckNothing.
 func (b *Backend) HandleCheckNothing(ctx context.Context, req *checknothing.HandleCheckNothingRequest) (
-	*istio_mixer_adapter_model_v1beta11.CheckResult, error) {
+	*v1beta1.CheckResult, error) {
 	scope.Infof("Backend.HandleCheckNothing %v", req)
 
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	if b.settings.getDenyCheck() {
-		return &istio_mixer_adapter_model_v1beta11.CheckResult{
+	params := &Params{}
+	if req.AdapterConfig != nil {
+		if err := types.UnmarshalAny(req.AdapterConfig, params); err != nil {
+			return nil, err
+		}
+	}
+	if b.settings.getDenyCheck() || (params.CheckParams != nil && !params.CheckParams.CheckAllow) {
+		scope.Infof("Backend.HandleCheckNothing => UNAUTHENTICATED")
+		return &v1beta1.CheckResult{
 			Status: google_rpc.Status{
 				Code:    int32(google_rpc.UNAUTHENTICATED),
 				Message: "bypass-backend-unauthenticated",
@@ -222,11 +237,45 @@ func (b *Backend) HandleCheckNothing(ctx context.Context, req *checknothing.Hand
 		}, nil
 	}
 
-	return &istio_mixer_adapter_model_v1beta11.CheckResult{
+	scope.Infof("Backend.HandleCheckNothing => OK")
+	validDuration := b.settings.getValidDuration()
+	validCount := b.settings.getValidCount()
+	if params.CheckParams != nil {
+		validDuration, _ = types.DurationFromProto(params.CheckParams.ValidDuration)
+		validCount = int32(params.CheckParams.ValidCount)
+	}
+	return &v1beta1.CheckResult{
 		Status: google_rpc.Status{
 			Code: int32(google_rpc.OK),
 		},
-		ValidDuration: 0,
-		ValidUseCount: 1,
+		ValidDuration: validDuration,
+		ValidUseCount: validCount,
+	}, nil
+}
+
+// HandleKeyval is an implementation of HandleKeyvalServiceServer.HandleKeyval.
+func (b *Backend) HandleKeyval(ctx context.Context, req *keyval.HandleKeyvalRequest) (*keyval.HandleKeyvalResponse, error) {
+	params := &Params{}
+	if err := params.Unmarshal(req.AdapterConfig.Value); err != nil {
+		return nil, err
+	}
+	key := req.Instance.Key
+	scope.Infof("look up %q\n", key)
+	value, ok := params.Table[key]
+	if ok {
+		return &keyval.HandleKeyvalResponse{
+			Result: &v1beta1.CheckResult{ValidDuration: 5 * time.Second},
+			Output: &keyval.OutputMsg{Value: value},
+		}, nil
+	}
+	return &keyval.HandleKeyvalResponse{
+		Result: &v1beta1.CheckResult{
+			Status: google_rpc.Status{
+				Code: int32(google_rpc.NOT_FOUND),
+				Details: []*types.Any{status.PackErrorDetail(&policy.DirectHttpResponse{
+					Body: fmt.Sprintf("<error_detail>key %q not found</error_detail>", key),
+				})},
+			},
+		},
 	}, nil
 }

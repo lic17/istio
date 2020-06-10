@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,309 +12,377 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model_test
+package model
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
 
-	rbacproto "istio.io/api/rbac/v1alpha1"
-	"istio.io/istio/pilot/pkg/config/memory"
-	"istio.io/istio/pilot/pkg/model"
+	meshconfig "istio.io/api/mesh/v1alpha1"
+	authpb "istio.io/api/security/v1beta1"
+	selectorpb "istio.io/api/type/v1beta1"
+	"istio.io/istio/pkg/config/labels"
+	"istio.io/istio/pkg/config/mesh"
+	"istio.io/istio/pkg/config/schema/collection"
+	"istio.io/istio/pkg/config/schema/collections"
+	"istio.io/istio/pkg/config/schema/resource"
+	"istio.io/pkg/ledger"
 )
 
-func TestAddConfig(t *testing.T) {
-	roleCfg := model.Config{
-		ConfigMeta: model.ConfigMeta{
-			Type: model.ServiceRole.Type, Name: "test-role-1", Namespace: model.NamespaceAll},
-		Spec: &rbacproto.ServiceRole{},
-	}
-	bindingCfg := model.Config{
-		ConfigMeta: model.ConfigMeta{
-			Type: model.ServiceRoleBinding.Type, Name: "test-binding-1", Namespace: model.NamespaceAll},
-		Spec: &rbacproto.ServiceRoleBinding{
-			Subjects: []*rbacproto.Subject{{User: "test-user-1"}},
-			RoleRef:  &rbacproto.RoleRef{Kind: "ServiceRole", Name: "test-role-1"},
-		},
-	}
-
-	invalidateBindingCfg := model.Config{
-		ConfigMeta: model.ConfigMeta{
-			Type: model.ServiceRoleBinding.Type, Name: "test-binding-1", Namespace: model.NamespaceAll},
-		Spec: &rbacproto.ServiceRoleBinding{
-			Subjects: []*rbacproto.Subject{{User: "test-user-1"}},
-			RoleRef:  &rbacproto.RoleRef{Kind: "ServiceRole", Name: ""},
-		},
-	}
-
-	cases := []struct {
-		name                     string
-		config                   []model.Config
-		authzPolicies            *model.AuthorizationPolicies
-		expectedRolesAndBindings *model.RolesAndBindings
-	}{
-		{
-			name:                     "test add config for ServiceRole",
-			config:                   []model.Config{roleCfg},
-			authzPolicies:            &model.AuthorizationPolicies{},
-			expectedRolesAndBindings: &model.RolesAndBindings{[]model.Config{roleCfg}, map[string][]*rbacproto.ServiceRoleBinding{}},
-		},
-		{
-			name:                     "test add invalidate config for ServiceRoleBinding",
-			config:                   []model.Config{invalidateBindingCfg},
-			authzPolicies:            &model.AuthorizationPolicies{},
-			expectedRolesAndBindings: nil,
-		},
-		{
-			name:          "test add config for ServiceRoleBinding",
-			config:        []model.Config{bindingCfg},
-			authzPolicies: &model.AuthorizationPolicies{},
-			expectedRolesAndBindings: &model.RolesAndBindings{
-				[]model.Config{},
-				map[string][]*rbacproto.ServiceRoleBinding{
-					bindingCfg.Spec.(*rbacproto.ServiceRoleBinding).RoleRef.Name: {bindingCfg.Spec.(*rbacproto.ServiceRoleBinding)},
-				},
-			},
-		},
-		{
-			name:          "test add config for both ServiceRoleBinding and ServiceRole",
-			config:        []model.Config{roleCfg, bindingCfg},
-			authzPolicies: &model.AuthorizationPolicies{},
-			expectedRolesAndBindings: &model.RolesAndBindings{
-				[]model.Config{roleCfg},
-				map[string][]*rbacproto.ServiceRoleBinding{
-					bindingCfg.Spec.(*rbacproto.ServiceRoleBinding).RoleRef.Name: {bindingCfg.Spec.(*rbacproto.ServiceRoleBinding)},
-				},
-			},
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			for _, role := range c.config {
-				c.authzPolicies.AddConfig(&role)
-			}
-			if !reflect.DeepEqual(c.expectedRolesAndBindings, c.authzPolicies.NamespaceToPolicies[model.NamespaceAll]) {
-				t.Errorf("[%s]Excepted:\n%v\n, Got: \n%v\n", c.name, c.expectedRolesAndBindings, c.authzPolicies.NamespaceToPolicies[model.NamespaceAll])
-			}
-		})
-	}
-}
-
-func TestRolesForNamespace(t *testing.T) {
-	roleCfg := model.Config{
-		ConfigMeta: model.ConfigMeta{
-			Type: model.ServiceRole.Type, Name: "test-role-1", Namespace: model.NamespaceAll},
-		Spec: &rbacproto.ServiceRole{},
-	}
-	bindingCfg := model.Config{
-		ConfigMeta: model.ConfigMeta{
-			Type: model.ServiceRoleBinding.Type, Name: "test-binding-1", Namespace: model.NamespaceAll},
-		Spec: &rbacproto.ServiceRoleBinding{
-			Subjects: []*rbacproto.Subject{{User: "test-user-1"}},
-			RoleRef:  &rbacproto.RoleRef{Kind: "ServiceRole", Name: "test-role-1"},
-		},
-	}
-
-	cases := []struct {
-		name                            string
-		authzPolicies                   *model.AuthorizationPolicies
-		ns                              string
-		expectedRolesServiceRoleBinding []model.Config
-	}{
-		{
-			name:                            "authzPolicies is nil",
-			authzPolicies:                   nil,
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: []model.Config{},
-		},
-		{
-			name:                            "the NamespaceToPolicies of authzPolicies is nil",
-			authzPolicies:                   &model.AuthorizationPolicies{},
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: []model.Config{},
-		},
-		{
-			name:                            "the namespaces of authzPolicies in NamespaceToPolicies is not exist",
-			authzPolicies:                   &model.AuthorizationPolicies{map[string]*model.RolesAndBindings{}, nil},
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: []model.Config{},
-		},
-		{
-			name: "the roles of authzPolicies in NamespaceToPolicies is nil",
-			authzPolicies: &model.AuthorizationPolicies{
-				map[string]*model.RolesAndBindings{
-					"default": {
-						Roles:              []model.Config{},
-						RoleNameToBindings: map[string][]*rbacproto.ServiceRoleBinding{},
-					},
-				},
-				nil,
-			},
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: []model.Config{},
-		},
-		{
-			name: "all seems ok",
-			authzPolicies: &model.AuthorizationPolicies{
-				map[string]*model.RolesAndBindings{
-					model.NamespaceAll: {
-						Roles:              []model.Config{roleCfg, bindingCfg},
-						RoleNameToBindings: map[string][]*rbacproto.ServiceRoleBinding{},
-					},
-				},
-				nil,
-			},
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: []model.Config{roleCfg, bindingCfg},
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			actual := c.authzPolicies.RolesForNamespace(c.ns)
-			if !reflect.DeepEqual(c.expectedRolesServiceRoleBinding, actual) {
-				t.Errorf("Got different Config, Excepted:\n%v\n, Got: \n%v\n", c.expectedRolesServiceRoleBinding, actual)
-			}
-		})
-	}
-}
-
-func TestRoleToBindingsForNamespace(t *testing.T) {
-	bindingCfg := model.Config{
-		ConfigMeta: model.ConfigMeta{
-			Type: model.ServiceRoleBinding.Type, Name: "test-binding-1", Namespace: model.NamespaceAll},
-		Spec: &rbacproto.ServiceRoleBinding{
-			Subjects: []*rbacproto.Subject{{User: "test-user-1"}},
-			RoleRef:  &rbacproto.RoleRef{Kind: "ServiceRole", Name: "test-role-1"},
-		},
-	}
-
-	cases := []struct {
-		name                            string
-		authzPolicies                   *model.AuthorizationPolicies
-		ns                              string
-		expectedRolesServiceRoleBinding map[string][]*rbacproto.ServiceRoleBinding
-	}{
-		{
-			name:                            "authzPolicies is nil",
-			authzPolicies:                   nil,
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: map[string][]*rbacproto.ServiceRoleBinding{},
-		},
-		{
-			name:                            "the NamespaceToPolicies of authzPolicies is nil",
-			authzPolicies:                   &model.AuthorizationPolicies{},
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: map[string][]*rbacproto.ServiceRoleBinding{},
-		},
-		{
-			name:                            "the namespaces of authzPolicies in NamespaceToPolicies is not exist",
-			authzPolicies:                   &model.AuthorizationPolicies{map[string]*model.RolesAndBindings{}, nil},
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: map[string][]*rbacproto.ServiceRoleBinding{},
-		},
-		{
-			name: "the roles of authzPolicies in NamespaceToPolicies is nil",
-			authzPolicies: &model.AuthorizationPolicies{
-				map[string]*model.RolesAndBindings{
-					"default": {
-						Roles:              []model.Config{},
-						RoleNameToBindings: map[string][]*rbacproto.ServiceRoleBinding{},
-					},
-				},
-				nil,
-			},
-			ns:                              model.NamespaceAll,
-			expectedRolesServiceRoleBinding: map[string][]*rbacproto.ServiceRoleBinding{},
-		},
-		{
-			name: "all seems ok",
-			authzPolicies: &model.AuthorizationPolicies{
-				map[string]*model.RolesAndBindings{
-					model.NamespaceAll: {
-						Roles: []model.Config{},
-						RoleNameToBindings: map[string][]*rbacproto.ServiceRoleBinding{
-							bindingCfg.Spec.(*rbacproto.ServiceRoleBinding).RoleRef.Name: {bindingCfg.Spec.(*rbacproto.ServiceRoleBinding)},
+func TestAuthorizationPolicies_ListAuthorizationPolicies(t *testing.T) {
+	policy := &authpb.AuthorizationPolicy{
+		Rules: []*authpb.Rule{
+			{
+				From: []*authpb.Rule_From{
+					{
+						Source: &authpb.Source{
+							Principals: []string{"sleep"},
 						},
 					},
 				},
-				nil,
+				To: []*authpb.Rule_To{
+					{
+						Operation: &authpb.Operation{
+							Methods: []string{"GET"},
+						},
+					},
+				},
 			},
-			ns: model.NamespaceAll,
-			expectedRolesServiceRoleBinding: map[string][]*rbacproto.ServiceRoleBinding{
-				bindingCfg.Spec.(*rbacproto.ServiceRoleBinding).RoleRef.Name: {bindingCfg.Spec.(*rbacproto.ServiceRoleBinding)},
+		},
+	}
+	policyWithSelector := proto.Clone(policy).(*authpb.AuthorizationPolicy)
+	policyWithSelector.Selector = &selectorpb.WorkloadSelector{
+		MatchLabels: map[string]string{
+			"app":     "httpbin",
+			"version": "v1",
+		},
+	}
+	denyPolicy := proto.Clone(policy).(*authpb.AuthorizationPolicy)
+	denyPolicy.Action = authpb.AuthorizationPolicy_DENY
+
+	cases := []struct {
+		name           string
+		ns             string
+		workloadLabels map[string]string
+		configs        []Config
+		wantDeny       []AuthorizationPolicy
+		wantAllow      []AuthorizationPolicy
+	}{
+		{
+			name:      "no policies",
+			ns:        "foo",
+			wantAllow: nil,
+		},
+		{
+			name: "no policies in namespace foo",
+			ns:   "foo",
+			configs: []Config{
+				newConfig("authz-1", "bar", policy),
+				newConfig("authz-2", "bar", policy),
+			},
+			wantAllow: nil,
+		},
+		{
+			name: "one allow policy",
+			ns:   "bar",
+			configs: []Config{
+				newConfig("authz-1", "bar", policy),
+			},
+			wantAllow: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "bar",
+					Spec:      policy,
+				},
+			},
+		},
+		{
+			name: "one deny policy",
+			ns:   "bar",
+			configs: []Config{
+				newConfig("authz-1", "bar", denyPolicy),
+			},
+			wantDeny: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "bar",
+					Spec:      denyPolicy,
+				},
+			},
+		},
+		{
+			name: "two policies",
+			ns:   "bar",
+			configs: []Config{
+				newConfig("authz-1", "foo", policy),
+				newConfig("authz-1", "bar", policy),
+				newConfig("authz-2", "bar", policy),
+			},
+			wantAllow: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "bar",
+					Spec:      policy,
+				},
+				{
+					Name:      "authz-2",
+					Namespace: "bar",
+					Spec:      policy,
+				},
+			},
+		},
+		{
+			name: "mixing allow and deny policies",
+			ns:   "bar",
+			configs: []Config{
+				newConfig("authz-1", "bar", policy),
+				newConfig("authz-2", "bar", denyPolicy),
+			},
+			wantDeny: []AuthorizationPolicy{
+				{
+					Name:      "authz-2",
+					Namespace: "bar",
+					Spec:      denyPolicy,
+				},
+			},
+			wantAllow: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "bar",
+					Spec:      policy,
+				},
+			},
+		},
+		{
+			name: "selector exact match",
+			ns:   "bar",
+			workloadLabels: map[string]string{
+				"app":     "httpbin",
+				"version": "v1",
+			},
+			configs: []Config{
+				newConfig("authz-1", "bar", policyWithSelector),
+			},
+			wantAllow: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "bar",
+					Spec:      policyWithSelector,
+				},
+			},
+		},
+		{
+			name: "selector subset match",
+			ns:   "bar",
+			workloadLabels: map[string]string{
+				"app":     "httpbin",
+				"version": "v1",
+				"env":     "dev",
+			},
+			configs: []Config{
+				newConfig("authz-1", "bar", policyWithSelector),
+			},
+			wantAllow: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "bar",
+					Spec:      policyWithSelector,
+				},
+			},
+		},
+		{
+			name: "selector not match",
+			ns:   "bar",
+			workloadLabels: map[string]string{
+				"app":     "httpbin",
+				"version": "v2",
+			},
+			configs: []Config{
+				newConfig("authz-1", "bar", policyWithSelector),
+			},
+			wantAllow: nil,
+		},
+		{
+			name: "namespace not match",
+			ns:   "foo",
+			workloadLabels: map[string]string{
+				"app":     "httpbin",
+				"version": "v1",
+			},
+			configs: []Config{
+				newConfig("authz-1", "bar", policyWithSelector),
+			},
+			wantAllow: nil,
+		},
+		{
+			name: "root namespace",
+			ns:   "bar",
+			configs: []Config{
+				newConfig("authz-1", "istio-config", policy),
+			},
+			wantAllow: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "istio-config",
+					Spec:      policy,
+				},
+			},
+		},
+		{
+			name: "root namespace equals config namespace",
+			ns:   "istio-config",
+			configs: []Config{
+				newConfig("authz-1", "istio-config", policy),
+			},
+			wantAllow: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "istio-config",
+					Spec:      policy,
+				},
+			},
+		},
+		{
+			name: "root namespace and config namespace",
+			ns:   "bar",
+			configs: []Config{
+				newConfig("authz-1", "istio-config", policy),
+				newConfig("authz-2", "bar", policy),
+			},
+			wantAllow: []AuthorizationPolicy{
+				{
+					Name:      "authz-1",
+					Namespace: "istio-config",
+					Spec:      policy,
+				},
+				{
+					Name:      "authz-2",
+					Namespace: "bar",
+					Spec:      policy,
+				},
 			},
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			actual := c.authzPolicies.RoleToBindingsForNamespace(c.ns)
-			if !reflect.DeepEqual(c.expectedRolesServiceRoleBinding, actual) {
-				t.Errorf("Got different ServiceRoleBinding, Excepted:\n%v\n, Got: \n%v\n", c.expectedRolesServiceRoleBinding, actual)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			authzPolicies := createFakeAuthorizationPolicies(tc.configs, t)
+
+			gotDeny, gotAllow := authzPolicies.ListAuthorizationPolicies(
+				tc.ns, []labels.Instance{tc.workloadLabels})
+			if !reflect.DeepEqual(tc.wantAllow, gotAllow) {
+				t.Errorf("wantAllow:%v\n but got: %v\n", tc.wantAllow, gotAllow)
+			}
+			if !reflect.DeepEqual(tc.wantDeny, gotDeny) {
+				t.Errorf("wantDeny:%v\n but got: %v\n", tc.wantDeny, gotDeny)
 			}
 		})
 	}
 }
 
-func TestNewAuthzPolicies(t *testing.T) {
-	clusterRbacConfig := &rbacproto.RbacConfig{Mode: rbacproto.RbacConfig_ON}
-	rbacConfig := &rbacproto.RbacConfig{Mode: rbacproto.RbacConfig_OFF}
-	cases := []struct {
-		name   string
-		store  model.IstioConfigStore
-		expect *rbacproto.RbacConfig
-	}{
-		{name: "no policy", store: storeWithConfig(nil, nil)},
-		{name: "ClusterRbacConfig only", store: storeWithConfig(clusterRbacConfig, nil), expect: clusterRbacConfig},
-		{name: "RbacConfig only", store: storeWithConfig(nil, rbacConfig), expect: rbacConfig},
-		{name: "both ClusterRbacConfig and RbacConfig", store: storeWithConfig(clusterRbacConfig, rbacConfig), expect: clusterRbacConfig},
+func createFakeAuthorizationPolicies(configs []Config, t *testing.T) *AuthorizationPolicies {
+	store := &authzFakeStore{}
+	for _, cfg := range configs {
+		store.add(cfg)
 	}
+	environment := &Environment{
+		IstioConfigStore: MakeIstioStore(store),
+		Watcher:          mesh.NewFixedWatcher(&meshconfig.MeshConfig{RootNamespace: "istio-config"}),
+	}
+	authzPolicies, err := GetAuthorizationPolicies(environment)
+	if err != nil {
+		t.Fatalf("GetAuthorizationPolicies failed: %v", err)
+	}
+	return authzPolicies
+}
 
-	for _, c := range cases {
-		environment := &model.Environment{IstioConfigStore: c.store}
-		actual, _ := model.NewAuthzPolicies(environment)
-		if actual == nil || c.expect == nil {
-			if actual != nil {
-				t.Errorf("%s: Got %v but expecting nil", c.name, *actual)
-			} else if c.expect != nil {
-				t.Errorf("%s: Got nil but expecting %v", c.name, *c.expect)
-			}
-		} else {
-			if !reflect.DeepEqual(*actual.RbacConfig, *c.expect) {
-				t.Errorf("%s: Got %v but expecting %v", c.name, *actual.RbacConfig, *c.expect)
-			}
-		}
+func newConfig(name, ns string, spec proto.Message) Config {
+	var kind, version, group string
+
+	switch spec.(type) {
+	case *authpb.AuthorizationPolicy:
+		kind = collections.IstioSecurityV1Beta1Authorizationpolicies.Resource().Kind()
+		version = collections.IstioSecurityV1Beta1Authorizationpolicies.Resource().Version()
+		group = collections.IstioSecurityV1Beta1Authorizationpolicies.Resource().Group()
+	}
+	return Config{
+		ConfigMeta: ConfigMeta{
+			Type:      kind,
+			Version:   version,
+			Group:     group,
+			Name:      name,
+			Namespace: ns,
+		},
+		Spec: spec,
 	}
 }
 
-func storeWithConfig(clusterRbacConfig, rbacConfig proto.Message) model.IstioConfigStore {
-	store := memory.Make(model.IstioConfigTypes)
+type authzFakeStore struct {
+	data []struct {
+		typ resource.GroupVersionKind
+		ns  string
+		cfg Config
+	}
+}
 
-	if clusterRbacConfig != nil {
-		config := model.Config{
-			ConfigMeta: model.ConfigMeta{
-				Type:      model.ClusterRbacConfig.Type,
-				Name:      "default",
-				Namespace: "default",
-			},
-			Spec: clusterRbacConfig,
+func (fs *authzFakeStore) GetLedger() ledger.Ledger {
+	panic("implement me")
+}
+
+func (fs *authzFakeStore) SetLedger(ledger.Ledger) error {
+	panic("implement me")
+}
+
+func (fs *authzFakeStore) add(config Config) {
+	fs.data = append(fs.data, struct {
+		typ resource.GroupVersionKind
+		ns  string
+		cfg Config
+	}{
+		typ: config.GroupVersionKind(),
+		ns:  config.Namespace,
+		cfg: config,
+	})
+}
+
+func (fs *authzFakeStore) Schemas() collection.Schemas {
+	return collection.SchemasFor()
+}
+
+func (fs *authzFakeStore) Get(_ resource.GroupVersionKind, _, _ string) *Config {
+	return nil
+}
+
+func (fs *authzFakeStore) List(typ resource.GroupVersionKind, namespace string) ([]Config, error) {
+	var configs []Config
+	for _, data := range fs.data {
+		if data.typ == typ {
+			if namespace != "" && data.ns == namespace {
+				continue
+			}
+			configs = append(configs, data.cfg)
 		}
-		store.Create(config)
 	}
-	if rbacConfig != nil {
-		config := model.Config{
-			ConfigMeta: model.ConfigMeta{
-				Type:      model.RbacConfig.Type,
-				Name:      "default",
-				Namespace: "default",
-			},
-			Spec: rbacConfig,
-		}
-		store.Create(config)
-	}
-	return model.MakeIstioStore(store)
+	return configs, nil
+}
+
+func (fs *authzFakeStore) Delete(_ resource.GroupVersionKind, _, _ string) error {
+	return fmt.Errorf("not implemented")
+}
+func (fs *authzFakeStore) Create(Config) (string, error) {
+	return "not implemented", nil
+}
+
+func (fs *authzFakeStore) Update(Config) (string, error) {
+	return "not implemented", nil
+}
+
+func (fs *authzFakeStore) Version() string {
+	return "not implemented"
+}
+func (fs *authzFakeStore) GetResourceAtVersion(version string, key string) (resourceVersion string, err error) {
+	return "not implemented", nil
 }

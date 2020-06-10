@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // nolint: lll
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -a mixer/adapter/cloudwatch/config/config.proto -x "-n cloudwatch -t metric"
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -a mixer/adapter/cloudwatch/config/config.proto -x "-n cloudwatch -t metric"
 
 package cloudwatch
 
@@ -28,6 +28,7 @@ import (
 
 	istio_policy_v1beta1 "istio.io/api/policy/v1beta1"
 	"istio.io/istio/mixer/adapter/cloudwatch/config"
+	"istio.io/istio/mixer/adapter/metadata"
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/template/logentry"
 	"istio.io/istio/mixer/template/metric"
@@ -197,14 +198,7 @@ func (h *handler) Close() error {
 
 // GetInfo returns the adapter.Info specific to this adapter.
 func GetInfo() adapter.Info {
-	return adapter.Info{
-		Name:        "cloudwatch",
-		Description: "Sends metrics to cloudwatch and logs to cloudwatchlogs",
-		SupportedTemplates: []string{
-			metric.TemplateName,
-			logentry.TemplateName,
-		},
-		NewBuilder:    func() adapter.HandlerBuilder { return &builder{} },
-		DefaultConfig: &config.Params{},
-	}
+	info := metadata.GetInfo("cloudwatch")
+	info.NewBuilder = func() adapter.HandlerBuilder { return &builder{} }
+	return info
 }

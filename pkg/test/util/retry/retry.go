@@ -1,4 +1,4 @@
-//  Copyright 2018 Istio Authors
+//  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -17,26 +17,33 @@ package retry
 import (
 	"fmt"
 	"time"
+
+	"istio.io/istio/pkg/test"
 )
 
 const (
 	// DefaultTimeout the default timeout for the entire retry operation
-	DefaultTimeout = time.Second * 20
+	DefaultTimeout = time.Second * 30
 
 	// DefaultDelay the default delay between successive retry attempts
 	DefaultDelay = time.Millisecond * 10
+
+	// DefaultConverge the default converge, requiring something to succeed one time
+	DefaultConverge = 1
 )
 
 var (
 	defaultConfig = config{
-		timeout: DefaultTimeout,
-		delay:   DefaultDelay,
+		timeout:  DefaultTimeout,
+		delay:    DefaultDelay,
+		converge: DefaultConverge,
 	}
 )
 
 type config struct {
-	timeout time.Duration
-	delay   time.Duration
+	timeout  time.Duration
+	delay    time.Duration
+	converge int
 }
 
 // Option for a retry opteration.
@@ -56,8 +63,40 @@ func Delay(delay time.Duration) Option {
 	}
 }
 
+// Converge sets the number of successes in a row needed to count a success.
+// This is useful to avoid the case where tests like `coin.Flip() == HEADS` will always
+// return success due to random variance.
+func Converge(successes int) Option {
+	return func(cfg *config) {
+		cfg.converge = successes
+	}
+}
+
 // RetriableFunc a function that can be retried.
 type RetriableFunc func() (result interface{}, completed bool, err error)
+
+// UntilSuccess retries the given function until success, timeout, or until the passed-in function returns nil.
+func UntilSuccess(fn func() error, options ...Option) error {
+	_, e := Do(func() (interface{}, bool, error) {
+		err := fn()
+		if err != nil {
+			return nil, false, err
+		}
+
+		return nil, true, nil
+	}, options...)
+
+	return e
+}
+
+// UntilSuccessOrFail calls UntilSuccess, and fails t with Fatalf if it ends up returning an error
+func UntilSuccessOrFail(t test.Failer, fn func() error, options ...Option) {
+	t.Helper()
+	err := UntilSuccess(fn, options...)
+	if err != nil {
+		t.Fatalf("retry.UntilSuccessOrFail: %v", err)
+	}
+}
 
 // Do retries the given function, until there is a timeout, or until the function indicates that it has completed.
 func Do(fn RetriableFunc, options ...Option) (interface{}, error) {
@@ -66,6 +105,7 @@ func Do(fn RetriableFunc, options ...Option) (interface{}, error) {
 		option(&cfg)
 	}
 
+	successes := 0
 	var lasterr error
 	to := time.After(cfg.timeout)
 	for {
@@ -77,7 +117,16 @@ func Do(fn RetriableFunc, options ...Option) (interface{}, error) {
 
 		result, completed, err := fn()
 		if completed {
-			return result, err
+			if err == nil {
+				successes++
+			} else {
+				successes = 0
+			}
+			if successes >= cfg.converge {
+				return result, err
+			}
+		} else {
+			successes = 0
 		}
 		if err != nil {
 			lasterr = err

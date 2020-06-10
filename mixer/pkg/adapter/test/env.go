@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,22 +18,26 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"istio.io/istio/mixer/pkg/adapter"
+	"istio.io/istio/pkg/listwatch"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 )
 
 // Env is an adapter environment that defers to the testing context t. Tracks all messages logged so they can be tested against.
 type Env struct {
-	t *testing.T
-
 	done chan struct{} // A channel to notify async work done
 	lock sync.Mutex    // guards logs
 	logs []string
 }
 
 // NewEnv returns an adapter environment that redirects logging output to the given testing context.
-func NewEnv(t *testing.T) *Env {
-	return &Env{t, make(chan struct{}), sync.Mutex{}, make([]string, 0)}
+func NewEnv(_ *testing.T) *Env {
+	return &Env{make(chan struct{}), sync.Mutex{}, make([]string, 0)}
 }
 
 // Logger returns a logger that writes to testing.T.Log
@@ -114,11 +118,21 @@ func (e *Env) log(format string, args ...interface{}) string {
 	e.logs = append(e.logs, l)
 	e.lock.Unlock()
 
-	e.t.Log(l)
 	return l
 }
 
 // GetDoneChan returns the channel that returns notification when the async work is done.
 func (e *Env) GetDoneChan() chan struct{} {
 	return e.done
+}
+
+func (e *Env) NewInformer(
+	clientset kubernetes.Interface,
+	objType runtime.Object,
+	duration time.Duration,
+	listerWatcher func(namespace string) cache.ListerWatcher,
+	indexers cache.Indexers) cache.SharedIndexInformer {
+
+	mlw := listwatch.MultiNamespaceListerWatcher([]string{""}, listerWatcher)
+	return cache.NewSharedIndexInformer(mlw, objType, duration, indexers)
 }

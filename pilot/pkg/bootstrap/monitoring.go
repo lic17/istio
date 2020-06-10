@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,12 +19,12 @@ import (
 	"net"
 	"net/http"
 
+	ocprom "contrib.go.opencensus.io/exporter/prometheus"
 	"github.com/prometheus/client_golang/prometheus"
-	ocprom "go.opencensus.io/exporter/prometheus"
 	"go.opencensus.io/stats/view"
 
-	"istio.io/istio/pkg/log"
-	"istio.io/istio/pkg/version"
+	"istio.io/pkg/log"
+	"istio.io/pkg/version"
 )
 
 type monitor struct {
@@ -56,7 +56,7 @@ func addMonitor(mux *http.ServeMux) error {
 
 // Deprecated: we shouldn't have 2 http ports. Will be removed after code using
 // this port is removed.
-func startMonitor(addr string, mux *http.ServeMux) (*monitor, net.Addr, error) {
+func startMonitor(addr string, mux *http.ServeMux) (*monitor, error) {
 	m := &monitor{
 		shutdown: make(chan struct{}),
 	}
@@ -65,7 +65,7 @@ func startMonitor(addr string, mux *http.ServeMux) (*monitor, net.Addr, error) {
 	var listener net.Listener
 	var err error
 	if listener, err = net.Listen("tcp", addr); err != nil {
-		return nil, nil, fmt.Errorf("unable to listen on socket: %v", err)
+		return nil, fmt.Errorf("unable to listen on socket: %v", err)
 	}
 
 	// NOTE: this is a temporary solution to provide bare-bones debug functionality
@@ -73,7 +73,7 @@ func startMonitor(addr string, mux *http.ServeMux) (*monitor, net.Addr, error) {
 	// is coming. that design will include proper coverage of statusz/healthz type
 	// functionality, in addition to how pilot reports its own metrics.
 	if err = addMonitor(mux); err != nil {
-		return nil, nil, fmt.Errorf("could not establish self-monitoring: %v", err)
+		return nil, fmt.Errorf("could not establish self-monitoring: %v", err)
 	}
 	m.monitoringServer = &http.Server{
 		Handler: mux,
@@ -92,11 +92,28 @@ func startMonitor(addr string, mux *http.ServeMux) (*monitor, net.Addr, error) {
 	// Serve, the call may be ignored and Serve never returns.
 	<-m.shutdown
 
-	return m, listener.Addr(), nil
+	return m, nil
 }
 
 func (m *monitor) Close() error {
 	err := m.monitoringServer.Close()
 	<-m.shutdown
 	return err
+}
+
+// initMonitor initializes the configuration for the pilot monitoring server.
+func (s *Server) initMonitor(addr string) error { //nolint: unparam
+	s.addStartFunc(func(stop <-chan struct{}) error {
+		monitor, err := startMonitor(addr, s.httpMux)
+		if err != nil {
+			return err
+		}
+		go func() {
+			<-stop
+			err := monitor.Close()
+			log.Debugf("Monitoring server terminated: %v", err)
+		}()
+		return nil
+	})
+	return nil
 }

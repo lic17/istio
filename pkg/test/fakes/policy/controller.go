@@ -1,4 +1,4 @@
-//  Copyright 2018 Istio Authors
+//  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package policy
 
 import (
 	"context"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"google.golang.org/grpc"
@@ -44,6 +45,19 @@ func NewController(address string) (*Controller, error) {
 // DenyCheck causes the policy backend to deny all check requests when set to true.
 func (c *Controller) DenyCheck(deny bool) error {
 	s := newSettings().setDenyCheck(deny)
+	return c.send(s)
+}
+
+// AllowCheck causes the policy backend to allow all check requests with the supplied
+// valid duration and valid count in check result.
+func (c *Controller) AllowCheck(d time.Duration, count int32) error {
+	s := newSettings().setDenyCheck(false)
+	if count > 0 {
+		s.setValidCount(count)
+	}
+	if d > 0 {
+		s.setValidDuration(d)
+	}
 	return c.send(s)
 }
 

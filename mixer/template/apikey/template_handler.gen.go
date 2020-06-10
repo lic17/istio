@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,16 +29,18 @@ import (
 //
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: apikey
+// kind: instance
 // metadata:
 //   name: validate-apikey
 //   namespace: istio-system
 // spec:
-//   api: api.service | ""
-//   api_version: api.version | ""
-//   api_operation: api.operation | ""
-//   api_key: api.key | ""
-//   timestamp: request.time
+//   compiledTemplate: apikey
+//   params:
+//     api: api.service | ""
+//     api_version: api.version | ""
+//     api_operation: api.operation | ""
+//     api_key: api.key | ""
+//     timestamp: request.time
 // ```
 
 // Fully qualified name of the template

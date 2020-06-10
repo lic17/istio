@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,12 @@
 package secretcontroller
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,17 +29,20 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/workqueue"
 
 	"istio.io/istio/pkg/kube"
-	"istio.io/istio/pkg/log"
+	"istio.io/pkg/log"
 )
 
 const (
-	mcLabel    = "istio/multiCluster"
+	MultiClusterSecretLabel = "istio/multiCluster"
+
 	maxRetries = 5
 )
 
@@ -42,12 +50,24 @@ const (
 // DO NOT USE - TEST ONLY.
 var LoadKubeConfig = clientcmd.Load
 
+var ValidateClientConfig = clientcmd.Validate
+
 // CreateInterfaceFromClusterConfig is a unit test override variable for interface create.
 // DO NOT USE - TEST ONLY.
 var CreateInterfaceFromClusterConfig = kube.CreateInterfaceFromClusterConfig
 
+// CreateMetadataInterfaceFromClusterConfig is a unit test override variable for interface create.
+// DO NOT USE - TEST ONLY.
+var CreateMetadataInterfaceFromClusterConfig = kube.CreateMetadataInterfaceFromClusterConfig
+
+//CreateDynamicInterfaceFromClusterConfig is helper function to create dynamic interface
+var CreateDynamicInterfaceFromClusterConfig = kube.CreateDynamicInterfaceFromClusterConfig
+
 // addSecretCallback prototype for the add secret callback function.
-type addSecretCallback func(clientset kubernetes.Interface, dataKey string) error
+type addSecretCallback func(clientset kubernetes.Interface, metadataClient metadata.Interface, dynamicClient dynamic.Interface, dataKey string) error
+
+// updateSecretCallback prototype for the update secret callback function.
+type updateSecretCallback func(clientset kubernetes.Interface, metadataClient metadata.Interface, dynamicClient dynamic.Interface, dataKey string) error
 
 // removeSecretCallback prototype for the remove secret callback function.
 type removeSecretCallback func(dataKey string) error
@@ -60,12 +80,17 @@ type Controller struct {
 	queue          workqueue.RateLimitingInterface
 	informer       cache.SharedIndexInformer
 	addCallback    addSecretCallback
+	updateCallback updateSecretCallback
 	removeCallback removeSecretCallback
 }
 
 // RemoteCluster defines cluster structZZ
 type RemoteCluster struct {
-	secretName string
+	secretName     string
+	client         kubernetes.Interface
+	metadataClient metadata.Interface
+	dynamicClient  dynamic.Interface
+	kubeConfigSha  [sha256.Size]byte
 }
 
 // ClusterStore is a collection of clusters
@@ -87,17 +112,18 @@ func NewController(
 	namespace string,
 	cs *ClusterStore,
 	addCallback addSecretCallback,
+	updateCallback updateSecretCallback,
 	removeCallback removeSecretCallback) *Controller {
 
 	secretsInformer := cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(opts meta_v1.ListOptions) (runtime.Object, error) {
-				opts.LabelSelector = mcLabel + "=true"
-				return kubeclientset.CoreV1().Secrets(namespace).List(opts)
+				opts.LabelSelector = MultiClusterSecretLabel + "=true"
+				return kubeclientset.CoreV1().Secrets(namespace).List(context.TODO(), opts)
 			},
 			WatchFunc: func(opts meta_v1.ListOptions) (watch.Interface, error) {
-				opts.LabelSelector = mcLabel + "=true"
-				return kubeclientset.CoreV1().Secrets(namespace).Watch(opts)
+				opts.LabelSelector = MultiClusterSecretLabel + "=true"
+				return kubeclientset.CoreV1().Secrets(namespace).Watch(context.TODO(), opts)
 			},
 		},
 		&corev1.Secret{}, 0, cache.Indexers{},
@@ -112,6 +138,7 @@ func NewController(
 		informer:       secretsInformer,
 		queue:          queue,
 		addCallback:    addCallback,
+		updateCallback: updateCallback,
 		removeCallback: removeCallback,
 	}
 
@@ -120,6 +147,17 @@ func NewController(
 		AddFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
 			log.Infof("Processing add: %s", key)
+			if err == nil {
+				queue.Add(key)
+			}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			if oldObj == newObj || reflect.DeepEqual(oldObj, newObj) {
+				return
+			}
+
+			key, err := cache.MetaNamespaceKeyFunc(newObj)
+			log.Infof("Processing update: %s", key)
 			if err == nil {
 				queue.Add(key)
 			}
@@ -136,7 +174,7 @@ func NewController(
 	return controller
 }
 
-// Run starts the controller until it receves a message over stopCh
+// Run starts the controller until it receives a message over stopCh
 func (c *Controller) Run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
@@ -155,22 +193,19 @@ func (c *Controller) Run(stopCh <-chan struct{}) {
 }
 
 // StartSecretController creates the secret controller.
-func StartSecretController(k8s kubernetes.Interface,
-	addCallback addSecretCallback,
-	removeCallback removeSecretCallback,
-	namespace string) error {
+func StartSecretController(k8s kubernetes.Interface, addCallback addSecretCallback,
+	updateCallback updateSecretCallback, removeCallback removeSecretCallback, namespace string) *Controller {
 	stopCh := make(chan struct{})
 	clusterStore := newClustersStore()
-	controller := NewController(k8s, namespace, clusterStore, addCallback, removeCallback)
+	controller := NewController(k8s, namespace, clusterStore, addCallback, updateCallback, removeCallback)
 
 	go controller.Run(stopCh)
 
-	return nil
+	return controller
 }
 
 func (c *Controller) runWorker() {
 	for c.processNextItem() {
-		// continue looping
 	}
 }
 
@@ -213,46 +248,100 @@ func (c *Controller) processItem(secretName string) error {
 	return nil
 }
 
+func createRemoteCluster(kubeConfig []byte, secretName string) (*RemoteCluster, error) {
+	if len(kubeConfig) == 0 {
+		return nil, errors.New("kubeconfig is empty")
+	}
+
+	clientConfig, err := LoadKubeConfig(kubeConfig)
+	if err != nil {
+		return nil, fmt.Errorf("kubeconfig cannot be loaded: %v", err)
+	}
+
+	if err := ValidateClientConfig(*clientConfig); err != nil {
+		return nil, fmt.Errorf("kubeconfig is not valid: %v", err)
+	}
+
+	client, err := CreateInterfaceFromClusterConfig(clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create client interface: %v", err)
+	}
+
+	metadataClient, err := CreateMetadataInterfaceFromClusterConfig(clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create metadata client interface: %v", err)
+	}
+
+	dynamicClient, err := CreateDynamicInterfaceFromClusterConfig(clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create dynamic client interface: %v", err)
+	}
+	return &RemoteCluster{
+		secretName:     secretName,
+		client:         client,
+		metadataClient: metadataClient,
+		dynamicClient:  dynamicClient,
+		kubeConfigSha:  sha256.Sum256(kubeConfig),
+	}, nil
+}
+
 func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 	for clusterID, kubeConfig := range s.Data {
 		// clusterID must be unique even across multiple secrets
-		if _, ok := c.cs.remoteClusters[clusterID]; !ok {
-			if len(kubeConfig) == 0 {
-				log.Infof("Data '%s' in the secret %s in namespace %s is empty, and disregarded ",
-					clusterID, secretName, s.ObjectMeta.Namespace)
+		if prev, ok := c.cs.remoteClusters[clusterID]; !ok {
+			log.Infof("Adding cluster_id=%v from secret=%v", clusterID, secretName)
+
+			remoteCluster, err := createRemoteCluster(kubeConfig, secretName)
+			if err != nil {
+				log.Errorf("Failed to add remote cluster from secret=%v for cluster_id=%v: %v",
+					secretName, clusterID, err)
 				continue
 			}
 
-			clientConfig, err := LoadKubeConfig(kubeConfig)
-			if err != nil {
-				log.Infof("Data '%s' in the secret %s in namespace %s is not a kubeconfig: %v",
-					clusterID, secretName, s.ObjectMeta.Namespace, err)
-				continue
-			}
-
-			log.Infof("Adding new cluster member: %s", clusterID)
-			c.cs.remoteClusters[clusterID] = &RemoteCluster{}
-			c.cs.remoteClusters[clusterID].secretName = secretName
-			client, _ := CreateInterfaceFromClusterConfig(clientConfig)
-			err = c.addCallback(client, clusterID)
-			if err != nil {
-				log.Errorf("error during create of clusterID: %s %v", clusterID, err)
+			c.cs.remoteClusters[clusterID] = remoteCluster
+			if err := c.addCallback(remoteCluster.client, remoteCluster.metadataClient, remoteCluster.dynamicClient, clusterID); err != nil {
+				log.Errorf("Error creating cluster_id=%s from secret %v: %v",
+					clusterID, secretName, err)
 			}
 		} else {
-			log.Infof("Cluster %s in the secret %s in namespace %s already exists",
-				clusterID, c.cs.remoteClusters[clusterID].secretName, s.ObjectMeta.Namespace)
+			if prev.secretName != secretName {
+				log.Errorf("ClusterID reused in two different secrets: %v and %v. ClusterID "+
+					"must be unique across all secrets", prev.secretName, secretName)
+				continue
+			}
+
+			kubeConfigSha := sha256.Sum256(kubeConfig)
+			if bytes.Equal(kubeConfigSha[:], prev.kubeConfigSha[:]) {
+				log.Infof("Updating cluster_id=%v from secret=%v: (kubeconfig are identical)", clusterID, secretName)
+			} else {
+				log.Infof("Updating cluster %v from secret %v", clusterID, secretName)
+
+				remoteCluster, err := createRemoteCluster(kubeConfig, secretName)
+				if err != nil {
+					log.Errorf("Error updating cluster_id=%v from secret=%v: %v",
+						clusterID, secretName, err)
+					continue
+				}
+				c.cs.remoteClusters[clusterID] = remoteCluster
+				if err := c.updateCallback(remoteCluster.client, remoteCluster.metadataClient, remoteCluster.dynamicClient, clusterID); err != nil {
+					log.Errorf("Error updating cluster_id from secret=%v: %s %v",
+						clusterID, secretName, err)
+				}
+			}
 		}
 	}
+
 	log.Infof("Number of remote clusters: %d", len(c.cs.remoteClusters))
 }
 
 func (c *Controller) deleteMemberCluster(secretName string) {
 	for clusterID, cluster := range c.cs.remoteClusters {
 		if cluster.secretName == secretName {
-			log.Infof("Deleting cluster member: %s", clusterID)
+			log.Infof("Deleting cluster_id=%v configured by secret=%v", clusterID, secretName)
 			err := c.removeCallback(clusterID)
 			if err != nil {
-				log.Errorf("error during cluster delete: %s %v", clusterID, err)
+				log.Errorf("Error removing cluster_id=%v configured by secret=%v: %v",
+					clusterID, secretName, err)
 			}
 			delete(c.cs.remoteClusters, clusterID)
 		}

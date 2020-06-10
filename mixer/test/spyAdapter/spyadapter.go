@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,19 +17,19 @@
 // Codegen blocks
 
 // apa template
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -d false -t mixer/test/spyAdapter/template/apa/tmpl.proto
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -d false -t mixer/test/spyAdapter/template/apa/tmpl.proto
 
 // check template
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -d false -t mixer/test/spyAdapter/template/check/tmpl.proto
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -d false -t mixer/test/spyAdapter/template/check/tmpl.proto
 
 // checkoutput template
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -d false -t mixer/test/spyAdapter/template/checkoutput/tmpl.proto
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -d false -t mixer/test/spyAdapter/template/checkoutput/tmpl.proto
 
 // report template
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -d false -t mixer/test/spyAdapter/template/report/reporttmpl.proto
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -d false -t mixer/test/spyAdapter/template/report/reporttmpl.proto
 
 // quota template
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -t mixer/test/spyAdapter/template/quota/quotatmpl.proto
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -t mixer/test/spyAdapter/template/quota/quotatmpl.proto
 
 // Package spyadapter is intended for Mixer testing *ONLY*.
 package spyadapter

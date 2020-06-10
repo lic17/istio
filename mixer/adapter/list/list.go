@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // nolint: lll
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -a mixer/adapter/list/config/config.proto -x "-n listchecker -t listentry"
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -a mixer/adapter/list/config/config.proto -x "-n listchecker -t listentry"
 
 // Package list provides an adapter that implements the listEntry
 // template to enable blacklist / whitelist checking of values.
@@ -33,10 +33,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gogo/googleapis/google/rpc"
+	rpc "istio.io/gogo-genproto/googleapis/google/rpc"
 
 	"istio.io/api/policy/v1beta1"
 	"istio.io/istio/mixer/adapter/list/config"
+	"istio.io/istio/mixer/adapter/metadata"
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/status"
 	"istio.io/istio/mixer/template/listentry"
@@ -285,22 +286,9 @@ func getCheckResult(config config.Params, code rpc.Code, msg string) adapter.Che
 
 // GetInfo returns the Info associated with this adapter implementation.
 func GetInfo() adapter.Info {
-	return adapter.Info{
-		Name:               "listchecker",
-		Impl:               "istio.io/istio/mixer/adapter/list",
-		Description:        "Checks whether an entry is present in a list",
-		SupportedTemplates: []string{listentry.TemplateName},
-		DefaultConfig: &config.Params{
-			RefreshInterval: 60 * time.Second,
-			Ttl:             300 * time.Second,
-			CachingInterval: 300 * time.Second,
-			CachingUseCount: 10000,
-			EntryType:       config.STRINGS,
-			Blacklist:       false,
-		},
-
-		NewBuilder: func() adapter.HandlerBuilder { return &builder{} },
-	}
+	info := metadata.GetInfo("listchecker")
+	info.NewBuilder = func() adapter.HandlerBuilder { return &builder{} }
+	return info
 }
 
 type builder struct {

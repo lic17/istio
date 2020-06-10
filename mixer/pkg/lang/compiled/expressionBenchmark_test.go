@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	ilt "istio.io/istio/mixer/pkg/il/testing"
-	"istio.io/istio/mixer/pkg/lang/ast"
+	"istio.io/pkg/attribute"
 )
 
 // 12/6/2017
@@ -32,7 +32,7 @@ func BenchmarkCompiled(b *testing.B) {
 			continue
 		}
 
-		finder := ast.NewFinder(test.Conf())
+		finder := attribute.NewFinder(test.Conf())
 
 		builder := NewBuilder(finder)
 		expression, _, err := builder.Compile(test.E)

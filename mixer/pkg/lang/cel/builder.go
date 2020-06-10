@@ -1,4 +1,4 @@
-// Copyright 2019 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,9 +22,7 @@ import (
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 
 	descriptor "istio.io/api/policy/v1beta1"
-	"istio.io/istio/mixer/pkg/attribute"
-	"istio.io/istio/mixer/pkg/lang/ast"
-	"istio.io/istio/mixer/pkg/lang/compiled"
+	"istio.io/pkg/attribute"
 )
 
 // LanguageMode controls parsing and evaluation properties of the expression builder
@@ -42,7 +40,7 @@ const (
 type ExpressionBuilder struct {
 	mode     LanguageMode
 	provider *attributeProvider
-	env      celgo.Env
+	env      *celgo.Env
 }
 
 type expression struct {
@@ -94,7 +92,7 @@ func (ex *expression) String() string {
 }
 
 // NewBuilder returns a new ExpressionBuilder
-func NewBuilder(finder ast.AttributeDescriptorFinder, mode LanguageMode) *ExpressionBuilder {
+func NewBuilder(finder attribute.AttributeDescriptorFinder, mode LanguageMode) *ExpressionBuilder {
 	provider := newAttributeProvider(finder.Attributes())
 	env := provider.newEnvironment()
 
@@ -106,7 +104,7 @@ func NewBuilder(finder ast.AttributeDescriptorFinder, mode LanguageMode) *Expres
 }
 
 // Compile the given text and return a pre-compiled expression object.
-func (exb *ExpressionBuilder) check(text string) (checked celgo.Ast, typ descriptor.ValueType, err error) {
+func (exb *ExpressionBuilder) check(text string) (checked *celgo.Ast, typ descriptor.ValueType, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic during CEL parsing of expression %q", text)
@@ -139,7 +137,7 @@ func (exb *ExpressionBuilder) check(text string) (checked celgo.Ast, typ descrip
 }
 
 // Compile the given text and return a pre-compiled expression object.
-func (exb *ExpressionBuilder) Compile(text string) (compiled.Expression, descriptor.ValueType, error) {
+func (exb *ExpressionBuilder) Compile(text string) (attribute.Expression, descriptor.ValueType, error) {
 	checked, typ, err := exb.check(text)
 	if err != nil {
 		return nil, typ, err

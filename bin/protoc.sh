@@ -19,15 +19,15 @@ if [[ $# -le 0 ]]; then
     exit 1
 fi
 
-SCRIPTPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-ROOTDIR="$(dirname "$SCRIPTPATH")"
+RETRY_COUNT=3
 
-# Ensure expected GOPATH setup
-if [ "$ROOTDIR" != "${GOPATH-$HOME/go}/src/istio.io/istio" ]; then
-  die "Istio not found in GOPATH/src/istio.io/"
-fi
+api=$(go list -m -f "{{.Dir}}" istio.io/api)
 
-gen_img=gcr.io/istio-testing/protoc:2018-06-12
+# This occasionally flakes out, so have a simple retry loop
+for (( i=1; i <= RETRY_COUNT; i++ )); do
+  protoc -I"${REPO_ROOT}"/common-protos -I"${api}" "$@" && break
 
-docker run  -i --volume /var/run/docker.sock:/var/run/docker.sock \
-  --rm --entrypoint /usr/bin/protoc -v "$ROOTDIR:$ROOTDIR" -w "$(pwd)" $gen_img "$@"
+  ret=$?
+  echo "Attempt ${i}/${RETRY_COUNT} to run protoc failed with exit code ${ret}" >&2
+  (( i == RETRY_COUNT )) && exit $ret
+done

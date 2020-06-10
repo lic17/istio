@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,18 +22,19 @@ import (
 	"istio.io/istio/mixer/pkg/adapter"
 )
 
-// The `reportnothing` template represents an empty block of data, which can useful
+// The `reportnothing` template represents an empty block of data, which can be useful
 // in different testing scenarios.
 //
 // Example config:
 //
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: reportnothing
+// kind: instance
 // metadata:
 //   name: reportrequest
 //   namespace: istio-system
 // spec:
+//   compiledTemplate: reportnothing
 // ```
 
 // Fully qualified name of the template

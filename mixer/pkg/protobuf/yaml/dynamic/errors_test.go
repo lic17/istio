@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors.
+// Copyright Istio Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -427,9 +427,7 @@ func TestBuilderErrors(t *testing.T) {
 			err:         errors.New("unable to resolve enum"),
 			compiler:    compiler,
 			res: &fakeres{
-				resolveMessage: func(name string) *descriptor.DescriptorProto {
-					return res.ResolveMessage(name)
-				},
+				resolveMessage: res.ResolveMessage,
 			},
 		},
 	} {

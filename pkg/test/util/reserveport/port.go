@@ -1,4 +1,4 @@
-//  Copyright 2018 Istio Authors
+//  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -32,6 +32,10 @@ func (p *portImpl) Close() error {
 		return p.listener.Close()
 	}
 	return nil
+}
+
+func (p *portImpl) CloseSilently() {
+	_ = p.Close()
 }
 
 func newReservedPort() (port ReservedPort, err error) {

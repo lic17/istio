@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,16 +16,21 @@ package handler
 
 import (
 	"context"
-	"strconv"
 	"sync/atomic"
+	"time"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/tag"
 
 	"istio.io/istio/mixer/pkg/adapter"
-	"istio.io/istio/mixer/pkg/pool"
 	"istio.io/istio/mixer/pkg/runtime/monitoring"
-	"istio.io/istio/pkg/log"
+	"istio.io/istio/pkg/listwatch"
+	"istio.io/pkg/log"
+	"istio.io/pkg/pool"
 )
 
 type env struct {
@@ -33,22 +38,23 @@ type env struct {
 	gp               *pool.GoroutinePool
 	monitoringCtx    context.Context
 	daemons, workers *int64
+	namespaces       *[]string
 }
 
 // NewEnv returns a new environment instance.
-func NewEnv(cfgID int64, name string, gp *pool.GoroutinePool) adapter.Env {
+func NewEnv(cfgID int64, name string, gp *pool.GoroutinePool, namespaces []string) adapter.Env {
 	ctx := context.Background()
 	var err error
-	if ctx, err = tag.New(ctx, tag.Insert(monitoring.InitConfigIDTag, strconv.FormatInt(cfgID, 10)), tag.Insert(monitoring.HandlerTag, name)); err != nil {
+	if ctx, err = tag.New(ctx, tag.Insert(monitoring.HandlerTag, name)); err != nil {
 		log.Errorf("could not setup context for stats: %v", err)
 	}
-
 	return env{
 		logger:        newLogger(name),
 		gp:            gp,
 		monitoringCtx: ctx,
 		daemons:       new(int64),
 		workers:       new(int64),
+		namespaces:    &namespaces,
 	}
 }
 
@@ -134,4 +140,15 @@ func (e env) reportStrayWorkers() {
 	if atomic.LoadInt64(e.workers) > 0 {
 		_ = e.Logger().Errorf("adapter did not close all the scheduled workers")
 	}
+}
+
+func (e env) NewInformer(
+	clientset kubernetes.Interface,
+	objType runtime.Object,
+	duration time.Duration,
+	listerWatcher func(namespace string) cache.ListerWatcher,
+	indexers cache.Indexers) cache.SharedIndexInformer {
+
+	mlw := listwatch.MultiNamespaceListerWatcher(*e.namespaces, listerWatcher)
+	return cache.NewSharedIndexInformer(mlw, objType, duration, indexers)
 }

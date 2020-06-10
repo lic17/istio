@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import (
 
 	istio_mixer_v1_config_descriptor "istio.io/api/policy/v1beta1"
 	ilt "istio.io/istio/mixer/pkg/il/testing"
-	"istio.io/istio/mixer/pkg/lang/ast"
+	"istio.io/pkg/attribute"
 )
 
 func TestCompiledExpressions(t *testing.T) {
@@ -37,7 +37,7 @@ func TestCompiledExpressions(t *testing.T) {
 
 		name := "Compiled/" + test.TestName()
 		t.Run(name, func(tt *testing.T) {
-			finder := ast.NewFinder(test.Conf())
+			finder := attribute.NewFinder(test.Conf())
 
 			builder := NewBuilder(finder)
 			compiled, exprType, err := builder.Compile(test.E)

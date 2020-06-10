@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"sync"
 
-	"istio.io/istio/mixer/pkg/pool"
+	"istio.io/pkg/pool"
 )
 
 // we maintain a pool of these for use by the makeKey function

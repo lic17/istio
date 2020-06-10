@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,13 +17,11 @@ package store
 import (
 	"time"
 
-	"github.com/gogo/protobuf/proto"
-
-	"istio.io/istio/pkg/log"
+	"istio.io/pkg/log"
 )
 
 // StartWatch registers with store, initiates a watch, and returns the current config state.
-func StartWatch(s Store, kinds map[string]proto.Message) (map[Key]*Resource, <-chan Event, error) {
+func StartWatch(s Store) (map[Key]*Resource, <-chan Event, error) {
 
 	// create channel before listing.
 	watchChan, err := s.Watch()

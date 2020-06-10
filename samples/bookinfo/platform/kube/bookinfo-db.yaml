@@ -1,4 +1,4 @@
-# Copyright 2017 Istio Authors
+# Copyright Istio Authors
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -25,12 +25,19 @@ spec:
   selector:
     app: mongodb
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mongodb-v1
+  labels:
+    app: mongodb
+    version: v1
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+      version: v1
   template:
     metadata:
       labels:
@@ -39,8 +46,14 @@ spec:
     spec:
       containers:
       - name: mongodb 
-        image: istio/examples-bookinfo-mongodb:1.10.1
+        image: docker.io/istio/examples-bookinfo-mongodb:1.16.1
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 27017
+        volumeMounts:
+        - name: data-db
+          mountPath: /data/db
+      volumes:
+      - name: data-db
+        emptyDir:
 ---

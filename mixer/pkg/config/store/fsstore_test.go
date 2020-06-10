@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -299,15 +299,6 @@ func TestFSStore2MissingRoot(t *testing.T) {
 
 func TestFSStore2Robust(t *testing.T) {
 	const ns = "testing"
-	const tmpl = `
-kind: %s
-apiVersion: config.istio.io/v1alpha2
-metadata:
-  namespace: testing
-  name: %s
-spec:
-  %s
-`
 	for _, c := range []struct {
 		title   string
 		prepare func(fsroot string) error

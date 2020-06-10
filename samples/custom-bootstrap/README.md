@@ -20,7 +20,7 @@ We can create our helloworld app, using the custom config, with:
 kubectl apply -f example-app.yaml
 ```
 
-If you don't have [automatic sidecar injection](https://istio.io/docs/setup/kubernetes/sidecar-injection.html#automatic-sidecar-injection)
+If you don't have [automatic sidecar injection](https://istio.io/docs/setup/additional-setup/sidecar-injection/#automatic-sidecar-injection)
 set in your cluster you will need to manually inject it to the services instead:
 
 ```bash
@@ -42,7 +42,7 @@ The configuration provided will be passed to envoy using the [`--config-yaml`](h
 
 This will merge the passed in configuration with the default configuration. Singular values will replace the default values, while repeated values will be appended.
 
-For reference, [the default bootstrap configuration](/tools/deb/envoy_bootstrap_v2.json) and Envoy's [configuration reference](https://www.envoyproxy.io/docs/envoy/latest/configuration/configuration#config) may be useful
+For reference, [the default bootstrap configuration](/tools/packaging/common/envoy_bootstrap_v2.json) and Envoy's [configuration reference](https://www.envoyproxy.io/docs/envoy/latest/configuration/configuration#config) may be useful
 
 ## Cleanup
 

@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,11 +33,11 @@ import (
 
 func TestValidateConfig(t *testing.T) {
 	invalidCounter := config.Params_MetricInfo{
-		Name: "unsuported",
+		Name: "unsupported",
 		Type: config.COUNTER,
 	}
 	invalidGauge := config.Params_MetricInfo{
-		Name: "unsuported",
+		Name: "unsupported",
 		Type: config.GAUGE,
 	}
 	invalidHistogram := config.Params_MetricInfo{

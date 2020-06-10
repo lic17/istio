@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,25 +29,27 @@ import (
 //
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: logentry
+// kind: instance
 // metadata:
 //   name: accesslog
 //   namespace: istio-system
 // spec:
-//   severity: '"Default"'
-//   timestamp: request.time
-//   variables:
-//     sourceIp: source.ip | ip("0.0.0.0")
-//     destinationIp: destination.ip | ip("0.0.0.0")
-//     sourceUser: source.user | ""
-//     method: request.method | ""
-//     url: request.path | ""
-//     protocol: request.scheme | "http"
-//     responseCode: response.code | 0
-//     responseSize: response.size | 0
-//     requestSize: request.size | 0
-//     latency: response.duration | "0ms"
-//   monitored_resource_type: '"UNSPECIFIED"'
+//   compiledTemplate: logentry
+//   params:
+//     severity: '"Default"'
+//     timestamp: request.time
+//     variables:
+//       sourceIp: source.ip | ip("0.0.0.0")
+//       destinationIp: destination.ip | ip("0.0.0.0")
+//       sourceUser: source.principal | ""
+//       method: request.method | ""
+//       url: request.path | ""
+//       protocol: request.scheme | "http"
+//       responseCode: response.code | 0
+//       responseSize: response.size | 0
+//       requestSize: request.size | 0
+//       latency: response.duration | "0ms"
+//     monitored_resource_type: '"UNSPECIFIED"'
 // ```
 
 // Fully qualified name of the template

@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,13 +19,13 @@ import (
 	"strings"
 	"testing"
 
-	"istio.io/istio/mixer/pkg/attribute"
 	"istio.io/istio/mixer/pkg/il"
 	"istio.io/istio/mixer/pkg/il/interpreter"
 	ilt "istio.io/istio/mixer/pkg/il/testing"
 	"istio.io/istio/mixer/pkg/il/text"
 	"istio.io/istio/mixer/pkg/lang"
 	"istio.io/istio/mixer/pkg/lang/ast"
+	"istio.io/pkg/attribute"
 )
 
 func TestCompiler_SingleExpressionSession(t *testing.T) {
@@ -38,7 +38,7 @@ func TestCompiler_SingleExpressionSession(t *testing.T) {
 
 		t.Run(test.TestName(), func(tt *testing.T) {
 
-			finder := ast.NewFinder(test.Conf())
+			finder := attribute.NewFinder(test.Conf())
 
 			fns := lang.ExternFunctionMetadata
 			if test.Fns != nil {
@@ -95,7 +95,7 @@ func TestCompiler_DoubleExpressionSession(t *testing.T) {
 
 		t.Run(test.TestName(), func(tt *testing.T) {
 
-			finder := ast.NewFinder(test.Conf())
+			finder := attribute.NewFinder(test.Conf())
 
 			fns := lang.ExternFunctionMetadata
 			if test.Fns != nil {
@@ -166,7 +166,7 @@ func TestCompile(t *testing.T) {
 		name := fmt.Sprintf("%d '%s'", i, test.TestName())
 		t.Run(name, func(tt *testing.T) {
 
-			finder := ast.NewFinder(test.Conf())
+			finder := attribute.NewFinder(test.Conf())
 
 			fns := lang.ExternFunctionMetadata
 			if test.Fns != nil {
@@ -217,7 +217,7 @@ func TestCompile(t *testing.T) {
 			i := interpreter.New(program, externs)
 			v, err := i.Eval("eval", b)
 			if err != nil {
-				if test.Err != err.Error() {
+				if !strings.HasPrefix(err.Error(), test.Err) {
 					tt.Fatalf("expected error not found: E:'%v', A:'%v'", test.Err, err)
 				}
 				return

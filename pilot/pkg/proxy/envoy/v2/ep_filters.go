@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,109 +17,102 @@ package v2
 import (
 	"net"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/endpoint"
-	"github.com/gogo/protobuf/types"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	"github.com/golang/protobuf/ptypes/wrappers"
 
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/util"
 )
 
-// EndpointsFilterFunc is a function that filters data from the ClusterLoadAssignment and returns updated one
-type EndpointsFilterFunc func(endpoints []endpoint.LocalityLbEndpoints, conn *XdsConnection, env *model.Environment) []endpoint.LocalityLbEndpoints
-
 // EndpointsByNetworkFilter is a network filter function to support Split Horizon EDS - filter the endpoints based on the network
 // of the connected sidecar. The filter will filter out all endpoints which are not present within the
-// sidecar network and add a gateway endpoint to remote networks that have endpoints (if gateway exists).
+// sidecar network and add a gateway endpoint to remote networks that have endpoints
+// (if gateway exists and its IP is an IP and not a dns name).
 // Information for the mesh networks is provided as a MeshNetwork config map.
-func EndpointsByNetworkFilter(endpoints []endpoint.LocalityLbEndpoints, conn *XdsConnection, env *model.Environment) []endpoint.LocalityLbEndpoints {
-	// If the sidecar does not specify a network, ignore Split Horizon EDS and return all
-	network, found := conn.modelNode.Metadata[model.NodeMetadataNetwork]
-	if !found {
-		// Couldn't find the sidecar network, using default/local
-		network = ""
+func EndpointsByNetworkFilter(push *model.PushContext, proxyNetwork string, endpoints []*endpoint.LocalityLbEndpoints) []*endpoint.LocalityLbEndpoints {
+	// calculate the multiples of weight.
+	// It is needed to normalize the LB Weight across different networks.
+	multiples := 1
+	for _, gateways := range push.NetworkGateways() {
+		if num := len(gateways); num > 0 {
+			multiples *= num
+		}
 	}
 
 	// A new array of endpoints to be returned that will have both local and
 	// remote gateways (if any)
-	filtered := []endpoint.LocalityLbEndpoints{}
+	filtered := make([]*endpoint.LocalityLbEndpoints, 0)
 
 	// Go through all cluster endpoints and add those with the same network as the sidecar
 	// to the result. Also count the number of endpoints per each remote network while
 	// iterating so that it can be used as the weight for the gateway endpoint
 	for _, ep := range endpoints {
+		lbEndpoints := make([]*endpoint.LbEndpoint, 0)
+
 		// Weight (number of endpoints) for the EDS cluster for each remote networks
 		remoteEps := map[string]uint32{}
-
-		lbEndpoints := []endpoint.LbEndpoint{}
+		// calculate remote network endpoints
 		for _, lbEp := range ep.LbEndpoints {
 			epNetwork := istioMetadata(lbEp, "network")
-			if epNetwork == network {
-				// This is a local endpoint
-				lbEp.LoadBalancingWeight = &types.UInt32Value{
-					Value: uint32(1),
+			// This is a local endpoint or remote network endpoint
+			// but can be accessed directly from local network.
+			if epNetwork == proxyNetwork ||
+				len(push.NetworkGatewaysByNetwork(epNetwork)) == 0 {
+				// Clone the endpoint so subsequent updates to the shared cache of
+				// service endpoints doesn't overwrite endpoints already in-flight.
+				clonedLbEp := util.CloneLbEndpoint(lbEp)
+				clonedLbEp.LoadBalancingWeight = &wrappers.UInt32Value{
+					Value: uint32(multiples),
 				}
-				lbEndpoints = append(lbEndpoints, lbEp)
+				lbEndpoints = append(lbEndpoints, clonedLbEp)
 			} else {
-				// Remote endpoint. Increase the weight counter
+				// Remote network endpoint which can not be accessed directly from local network.
+				// Increase the weight counter
 				remoteEps[epNetwork]++
 			}
 		}
 
-		// If there is no MeshNetworks configuration, we don't have gateways information
-		// so just keep the endpoint with the local ones
-		if env.MeshNetworks == nil {
-			newEp := createLocalityLbEndpoints(&ep, lbEndpoints)
-			filtered = append(filtered, *newEp)
-			continue
-		}
-
-		// Add endpoints to remote networks' gateways
+		// Add remote networks' gateways to endpoints if the gateway is a valid IP
+		// If its a dns name (like AWS ELB), skip adding all endpoints from this network.
 
 		// Iterate over all networks that have the cluster endpoint (weight>0) and
 		// for each one of those add a new endpoint that points to the network's
-		// gateway with the relevant weight
-		for n, w := range remoteEps {
-			networkConf, found := env.MeshNetworks.Networks[n]
-			if !found {
-				continue
-			}
-			gws := networkConf.Gateways
-			if len(gws) == 0 {
-				continue
-			}
+		// gateway with the relevant weight. For each gateway endpoint, set the tlsMode metadata so that
+		// we initiate mTLS automatically to this remote gateway. Split horizon to remote gateway cannot
+		// work with plaintext
+		for network, w := range remoteEps {
+			gateways := push.NetworkGatewaysByNetwork(network)
 
-			// There may be multiple gateways for the network. Add an LbEndpoint for
-			// each one of them
-			for _, gw := range gws {
-				var gwEp *endpoint.LbEndpoint
-				//TODO add support for getting the gateway address from the service registry
+			gatewayNum := len(gateways)
+			weight := w * uint32(multiples/gatewayNum)
 
-				// If the gateway address in the config was a hostname it got already resolved
-				// and replaced with an IP address when loading the config
-				if gwIP := net.ParseIP(gw.GetAddress()); gwIP != nil {
-					addr := util.BuildAddress(gw.GetAddress(), gw.Port)
-					gwEp = &endpoint.LbEndpoint{
-						HostIdentifier: &endpoint.LbEndpoint_Endpoint{
-							Endpoint: &endpoint.Endpoint{
-								Address: &addr,
-							},
-						},
-						LoadBalancingWeight: &types.UInt32Value{
-							Value: w,
-						},
-					}
+			// There may be multiples gateways for one network. Add each gateway as an endpoint.
+			for _, gw := range gateways {
+				if net.ParseIP(gw.Addr) == nil {
+					// this is a gateway with hostname in it. skip this gateway as EDS can't take hostnames
+					continue
 				}
-
-				if gwEp != nil {
-					lbEndpoints = append(lbEndpoints, *gwEp)
+				epAddr := util.BuildAddress(gw.Addr, gw.Port)
+				gwEp := &endpoint.LbEndpoint{
+					HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+						Endpoint: &endpoint.Endpoint{
+							Address: epAddr,
+						},
+					},
+					LoadBalancingWeight: &wrappers.UInt32Value{
+						Value: weight,
+					},
 				}
+				// TODO: figure out a way to extract locality data from the gateway public endpoints in meshNetworks
+				gwEp.Metadata = util.BuildLbEndpointMetadata("", network, model.IstioMutualTLSModeLabel, push)
+				lbEndpoints = append(lbEndpoints, gwEp)
 			}
 		}
 
-		// Found local endpoint(s) so add to the result a new one LocalityLbEndpoints
-		// that holds only the local endpoints
-		newEp := createLocalityLbEndpoints(&ep, lbEndpoints)
-		filtered = append(filtered, *newEp)
+		// Found endpoint(s) that can be accessed from local network
+		// and then build a new LocalityLbEndpoints with them.
+		newEp := createLocalityLbEndpoints(ep, lbEndpoints)
+		filtered = append(filtered, newEp)
 	}
 
 	return filtered
@@ -132,23 +125,24 @@ func EndpointsByNetworkFilter(endpoints []endpoint.LocalityLbEndpoints, conn *Xd
 
 // Checks whether there is an istio metadata string value for the provided key
 // within the endpoint metadata. If exists, it will return the value.
-func istioMetadata(ep endpoint.LbEndpoint, key string) string {
+func istioMetadata(ep *endpoint.LbEndpoint, key string) string {
 	if ep.Metadata != nil &&
-		ep.Metadata.FilterMetadata["istio"] != nil &&
-		ep.Metadata.FilterMetadata["istio"].Fields != nil &&
-		ep.Metadata.FilterMetadata["istio"].Fields[key] != nil {
-		return ep.Metadata.FilterMetadata["istio"].Fields[key].GetStringValue()
+		ep.Metadata.FilterMetadata[util.IstioMetadataKey] != nil &&
+		ep.Metadata.FilterMetadata[util.IstioMetadataKey].Fields != nil &&
+		ep.Metadata.FilterMetadata[util.IstioMetadataKey].Fields[key] != nil {
+		return ep.Metadata.FilterMetadata[util.IstioMetadataKey].Fields[key].GetStringValue()
 	}
 	return ""
 }
 
-func createLocalityLbEndpoints(base *endpoint.LocalityLbEndpoints, lbEndpoints []endpoint.LbEndpoint) *endpoint.LocalityLbEndpoints {
-	var weight *types.UInt32Value
+func createLocalityLbEndpoints(base *endpoint.LocalityLbEndpoints, lbEndpoints []*endpoint.LbEndpoint) *endpoint.LocalityLbEndpoints {
+	var weight *wrappers.UInt32Value
 	if len(lbEndpoints) == 0 {
 		weight = nil
 	} else {
-		weight = &types.UInt32Value{
-			Value: uint32(len(lbEndpoints)),
+		weight = &wrappers.UInt32Value{}
+		for _, lbEp := range lbEndpoints {
+			weight.Value += lbEp.GetLoadBalancingWeight().Value
 		}
 	}
 	ep := &endpoint.LocalityLbEndpoints{
@@ -158,9 +152,4 @@ func createLocalityLbEndpoints(base *endpoint.LocalityLbEndpoints, lbEndpoints [
 		Priority:            base.Priority,
 	}
 	return ep
-}
-
-// LoadBalancingWeightNormalize set LoadBalancingWeight with a valid value.
-func LoadBalancingWeightNormalize(endpoints []endpoint.LocalityLbEndpoints) []endpoint.LocalityLbEndpoints {
-	return util.LocalityLbWeightNormalize(endpoints)
 }

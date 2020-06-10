@@ -39,7 +39,6 @@ spec:
         maxRetries: 4
         http1MaxPendingRequests: 14
     outlierDetection:
-        consecutiveErrors: 7
         interval: 8ms
         baseEjectionTime: 1m
         maxEjectionPercent: 11
@@ -52,7 +51,6 @@ spec:
     - name: v2
       labels:
         version: v2
-        version: v3
       trafficPolicy:
         loadBalancer:
           consistentHash:

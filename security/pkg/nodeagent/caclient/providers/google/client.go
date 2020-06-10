@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,25 +19,31 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
+	"github.com/golang/protobuf/ptypes/duration"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 
-	"istio.io/istio/pkg/log"
 	caClientInterface "istio.io/istio/security/pkg/nodeagent/caclient/interface"
 	gcapb "istio.io/istio/security/proto/providers/google"
+	"istio.io/pkg/env"
+	"istio.io/pkg/log"
 )
 
-var usePodDefaultFlag = false
-
 const bearerTokenPrefix = "Bearer "
+
+var (
+	googleCAClientLog = log.RegisterScope("googleca", "Google CA client debugging", 0)
+	gkeClusterURL     = env.RegisterStringVar("GKE_CLUSTER_URL", "", "The url of GKE cluster").Get()
+)
 
 type googleCAClient struct {
 	caEndpoint string
 	enableTLS  bool
-	client     gcapb.IstioCertificateServiceClient
+	client     gcapb.MeshCertificateServiceClient
 }
 
 // NewGoogleCAClient create a CA client for Google CA.
@@ -58,22 +64,25 @@ func NewGoogleCAClient(endpoint string, tls bool) (caClientInterface.Client, err
 		opts = grpc.WithInsecure()
 	}
 
+	// TODO(JimmyCYJ): This connection is create at construction time. If conn is broken at anytime,
+	//  need a way to reconnect.
 	conn, err := grpc.Dial(endpoint, opts)
 	if err != nil {
-		log.Errorf("Failed to connect to endpoint %s: %v", endpoint, err)
+		googleCAClientLog.Errorf("Failed to connect to endpoint %s: %v", endpoint, err)
 		return nil, fmt.Errorf("failed to connect to endpoint %s", endpoint)
 	}
 
-	c.client = gcapb.NewIstioCertificateServiceClient(conn)
+	c.client = gcapb.NewMeshCertificateServiceClient(conn)
 	return c, nil
 }
 
 // CSR Sign calls Google CA to sign a CSR.
-func (cl *googleCAClient) CSRSign(ctx context.Context, csrPEM []byte, token string,
+func (cl *googleCAClient) CSRSign(ctx context.Context, reqID string, csrPEM []byte, token string,
 	certValidTTLInSec int64) ([]string /*PEM-encoded certificate chain*/, error) {
-	req := &gcapb.IstioCertificateRequest{
-		Csr:              string(csrPEM),
-		ValidityDuration: certValidTTLInSec,
+	req := &gcapb.MeshCertificateRequest{
+		RequestId: reqID,
+		Csr:       string(csrPEM),
+		Validity:  &duration.Duration{Seconds: certValidTTLInSec},
 	}
 
 	// If the token doesn't have "Bearer " prefix, add it.
@@ -81,15 +90,25 @@ func (cl *googleCAClient) CSRSign(ctx context.Context, csrPEM []byte, token stri
 		token = bearerTokenPrefix + token
 	}
 
-	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("Authorization", token))
+	out, _ := metadata.FromOutgoingContext(ctx)
+	// preventing races by modification.
+	out = out.Copy()
+	out["authorization"] = []string{token}
+
+	zone := parseZone(gkeClusterURL)
+	if zone != "" {
+		out["x-goog-request-params"] = []string{fmt.Sprintf("location=locations/%s", zone)}
+	}
+
+	ctx = metadata.NewOutgoingContext(ctx, out)
 	resp, err := cl.client.CreateCertificate(ctx, req)
 	if err != nil {
-		log.Errorf("Failed to create certificate: %v", err)
+		googleCAClientLog.Errorf("Failed to create certificate: %v", err)
 		return nil, err
 	}
 
 	if len(resp.CertChain) <= 1 {
-		log.Errorf("CertChain length is %d, expected more than 1", len(resp.CertChain))
+		googleCAClientLog.Errorf("CertChain length is %d, expected more than 1", len(resp.CertChain))
 		return nil, errors.New("invalid response cert chain")
 	}
 
@@ -100,9 +119,20 @@ func (cl *googleCAClient) getTLSDialOption() (grpc.DialOption, error) {
 	// Load the system default root certificates.
 	pool, err := x509.SystemCertPool()
 	if err != nil {
-		log.Errorf("could not get SystemCertPool: %v", err)
+		googleCAClientLog.Errorf("could not get SystemCertPool: %v", err)
 		return nil, errors.New("could not get SystemCertPool")
 	}
 	creds := credentials.NewClientTLSFromCert(pool, "")
 	return grpc.WithTransportCredentials(creds), nil
+}
+
+func parseZone(clusterURL string) string {
+	// input: https://container.googleapis.com/v1/projects/testproj/locations/us-central1-c/clusters/cluster1
+	// output: us-central1-c
+	var rgx = regexp.MustCompile(`.*/projects/(.*)/locations/(.*)/clusters/.*`)
+	rs := rgx.FindStringSubmatch(clusterURL)
+	if len(rs) < 3 {
+		return ""
+	}
+	return rs[2]
 }

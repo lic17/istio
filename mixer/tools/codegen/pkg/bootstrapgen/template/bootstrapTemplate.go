@@ -1,4 +1,4 @@
-// Copyright 2016 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@ package template
 
 // BootstrapTemplate defines the template used to generate code that glues Mixer with generated template interfaces.
 // nolint:lll
-var BootstrapTemplate = `// Copyright 2017 Istio Authors
+var BootstrapTemplate = `// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -41,11 +41,10 @@ import (
     "strings"
     "net"
     "istio.io/istio/mixer/pkg/adapter"
-    "istio.io/istio/mixer/pkg/attribute"
-    "istio.io/istio/mixer/pkg/lang/ast"
     "istio.io/istio/mixer/pkg/lang/compiled"
     "istio.io/istio/mixer/pkg/runtime/lang"
-    "istio.io/istio/pkg/log"
+    "istio.io/pkg/attribute"
+    "istio.io/pkg/log"
     "istio.io/istio/mixer/pkg/template"
     istio_adapter_model_v1beta1 "istio.io/api/mixer/adapter/model/v1beta1"
     istio_policy_v1beta1 "istio.io/api/policy/v1beta1"
@@ -104,6 +103,11 @@ func (w *wrapperAttr) Names() []string {
 // Done indicates the bag can be reclaimed.
 func (w *wrapperAttr) Done() {
     w.done()
+}
+
+// ReferenceTracker implements the interface.
+func (w *wrapperAttr) ReferenceTracker() attribute.ReferenceTracker {
+    return nil
 }
  
 // String provides a dump of an attribute Bag that avoids affecting the
@@ -455,7 +459,7 @@ var (
         // See template.CreateOutputExpressionsFn for more details.
         CreateOutputExpressions: func(
             instanceParam proto.Message,
-            finder ast.AttributeDescriptorFinder,
+            finder attribute.AttributeDescriptorFinder,
             expb lang.Compiler) (map[string]compiled.Expression, error) {
             var err error
             var expType istio_policy_v1beta1.ValueType

@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -111,11 +111,13 @@ func TestClientSink(t *testing.T) {
 	reestablishStreamDelay = 100 * time.Millisecond
 	defer func() { reestablishStreamDelay = prevDelay }()
 
-	reconnectChan := make(chan struct{}, 10)
-	reconnectTestProbe = func() {
-		reconnectChan <- struct{}{}
+	reconnectChan := make(chan struct{}, 1)
+	c.reconnectTestProbe = func() {
+		select {
+		case reconnectChan <- struct{}{}:
+		default:
+		}
 	}
-	defer func() { reconnectTestProbe = nil }()
 
 	h.changes[test.FakeType0Collection] = nil
 

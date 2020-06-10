@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	proto "github.com/gogo/protobuf/proto"
+	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 
 	tmpl "istio.io/api/mixer/adapter/model/v1beta1"
@@ -349,7 +349,7 @@ func (m *Model) addTopLevelFields(fd *protoDesc.FileDescriptor) {
 	}
 
 	if tmplVariety, err := proto.GetExtension(fd.GetOptions(), tmpl.E_TemplateVariety); err == nil {
-		m.VarietyName = (*(tmplVariety.(*tmpl.TemplateVariety))).String()
+		m.VarietyName = (tmplVariety.(*tmpl.TemplateVariety)).String()
 	}
 
 	// For file level comments, comments from multiple locations are composed.

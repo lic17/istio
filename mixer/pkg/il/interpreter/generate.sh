@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2017 Istio Authors
+# Copyright Istio Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,6 +23,6 @@ BANNER=$(cat <<-END
 END
 )
 
-printf '%s\n\n' "${BANNER}" >"${SCRIPT_DIR}/interpreterRun.go"
-clang -x c -E -P "${SCRIPT_DIR}/interpreterRun.got" >>"${SCRIPT_DIR}/interpreterRun.go"
-gofmt -w "${SCRIPT_DIR}/interpreterRun.go"
+printf '%s\n\n' "${BANNER}" >"${SCRIPT_DIR}/interpreterRun.gen.go"
+clang -x c -E -P "${SCRIPT_DIR}/interpreterRun.got" >>"${SCRIPT_DIR}/interpreterRun.gen.go"
+gofmt -w "${SCRIPT_DIR}/interpreterRun.gen.go"

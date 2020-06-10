@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,43 +16,54 @@ package authenticate
 
 import (
 	"fmt"
-	"io/ioutil"
+	"strings"
 
 	"golang.org/x/net/context"
+	"google.golang.org/grpc/metadata"
+	"k8s.io/client-go/kubernetes"
 
 	"istio.io/istio/security/pkg/k8s/tokenreview"
 )
 
 const (
 	// identityTemplate is the SPIFFE format template of the identity.
-	identityTemplate = "spiffe://%s/ns/%s/sa/%s"
+	identityTemplate         = "spiffe://%s/ns/%s/sa/%s"
+	KubeJWTAuthenticatorType = "KubeJWTAuthenticator"
 )
 
-type tokenReviewClient interface {
-	ValidateK8sJwt(targetJWT string) ([]string, error)
-}
+type RemoteKubeClientGetter func(clusterID string) kubernetes.Interface
 
 // KubeJWTAuthenticator authenticates K8s JWTs.
 type KubeJWTAuthenticator struct {
-	client      tokenReviewClient
 	trustDomain string
+	jwtPolicy   string
+
+	// Primary cluster kube client
+	kubeClient kubernetes.Interface
+	// Primary cluster ID
+	clusterID string
+
+	// remote cluster kubeClient getter
+	remoteKubeClientGetter RemoteKubeClientGetter
 }
 
+var _ Authenticator = &KubeJWTAuthenticator{}
+
 // NewKubeJWTAuthenticator creates a new kubeJWTAuthenticator.
-func NewKubeJWTAuthenticator(k8sAPIServerURL, caCertPath, jwtPath, trustDomain string) (*KubeJWTAuthenticator, error) {
-	// Read the CA certificate of the k8s apiserver
-	caCert, err := ioutil.ReadFile(caCertPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read the CA certificate of k8s API server: %v", err)
-	}
-	reviewerJWT, err := ioutil.ReadFile(jwtPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read Citadel JWT: %v", err)
-	}
+func NewKubeJWTAuthenticator(client kubernetes.Interface, clusterID string,
+	remoteKubeClientGetter RemoteKubeClientGetter,
+	trustDomain, jwtPolicy string) *KubeJWTAuthenticator {
 	return &KubeJWTAuthenticator{
-		client:      tokenreview.NewK8sSvcAcctAuthn(k8sAPIServerURL, caCert, string(reviewerJWT[:])),
-		trustDomain: trustDomain,
-	}, nil
+		trustDomain:            trustDomain,
+		jwtPolicy:              jwtPolicy,
+		kubeClient:             client,
+		clusterID:              clusterID,
+		remoteKubeClientGetter: remoteKubeClientGetter,
+	}
+}
+
+func (a *KubeJWTAuthenticator) AuthenticatorType() string {
+	return KubeJWTAuthenticatorType
 }
 
 // Authenticate authenticates the call using the K8s JWT from the context.
@@ -62,15 +73,78 @@ func (a *KubeJWTAuthenticator) Authenticate(ctx context.Context) (*Caller, error
 	if err != nil {
 		return nil, fmt.Errorf("target JWT extraction error: %v", err)
 	}
-	id, err := a.client.ValidateK8sJwt(targetJWT)
+	clusterID := extractClusterID(ctx)
+	var id []string
+
+	kubeClient := a.GetKubeClient(clusterID)
+	if kubeClient == nil {
+		return nil, fmt.Errorf("could not get cluster %s's kube client", clusterID)
+	}
+	id, err = tokenreview.ValidateK8sJwt(kubeClient, targetJWT, a.jwtPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate the JWT: %v", err)
 	}
 	if len(id) != 2 {
 		return nil, fmt.Errorf("failed to parse the JWT. Validation result length is not 2, but %d", len(id))
 	}
+	callerNamespace := id[0]
+	callerServiceAccount := id[1]
 	return &Caller{
 		AuthSource: AuthSourceIDToken,
-		Identities: []string{fmt.Sprintf(identityTemplate, a.trustDomain, id[0], id[1])},
+		Identities: []string{fmt.Sprintf(identityTemplate, a.trustDomain, callerNamespace, callerServiceAccount)},
 	}, nil
+}
+
+func (a *KubeJWTAuthenticator) GetKubeClient(clusterID string) kubernetes.Interface {
+	// first match local/primary cluster
+	if a.clusterID == clusterID {
+		return a.kubeClient
+	}
+
+	// secondly try other remote clusters
+	if a.remoteKubeClientGetter != nil {
+		if res := a.remoteKubeClientGetter(clusterID); res != nil {
+			return res
+		}
+	}
+
+	// failover to local cluster
+	return a.kubeClient
+}
+
+func extractBearerToken(ctx context.Context) (string, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", fmt.Errorf("no metadata is attached")
+	}
+
+	authHeader, exists := md[authorizationMeta]
+	if !exists {
+		return "", fmt.Errorf("no HTTP authorization header exists")
+	}
+
+	for _, value := range authHeader {
+		if strings.HasPrefix(value, bearerTokenPrefix) {
+			return strings.TrimPrefix(value, bearerTokenPrefix), nil
+		}
+	}
+
+	return "", fmt.Errorf("no bearer token exists in HTTP authorization header")
+}
+
+func extractClusterID(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+
+	clusterIDHeader, exists := md[clusterIDMeta]
+	if !exists {
+		return ""
+	}
+
+	if len(clusterIDHeader) == 1 {
+		return clusterIDHeader[0]
+	}
+	return ""
 }

@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,16 +24,14 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gogo/protobuf/proto"
 
-	istio_mixer_v1_config "istio.io/api/policy/v1beta1"
 	pb "istio.io/api/policy/v1beta1"
 	"istio.io/istio/mixer/pkg/adapter"
-	"istio.io/istio/mixer/pkg/attribute"
-	"istio.io/istio/mixer/pkg/lang/ast"
 	"istio.io/istio/mixer/pkg/lang/compiled"
 	sample_apa "istio.io/istio/mixer/template/sample/apa"
 	sample_check "istio.io/istio/mixer/template/sample/check"
 	sample_quota "istio.io/istio/mixer/template/sample/quota"
 	sample_report "istio.io/istio/mixer/template/sample/report"
+	"istio.io/pkg/attribute"
 )
 
 // struct for declaring a test case for testing CreateInstance calls.
@@ -61,7 +59,7 @@ type createInstanceTest struct {
 }
 
 // default set of known attributes
-var defaultAttributeInfos = map[string]*istio_mixer_v1_config.AttributeManifest_AttributeInfo{
+var defaultAttributeInfos = map[string]*pb.AttributeManifest_AttributeInfo{
 	"ai": {
 		ValueType: pb.INT64,
 	},
@@ -158,9 +156,9 @@ var defaultAttributeInfos = map[string]*istio_mixer_v1_config.AttributeManifest_
 }
 
 func combineManifests(
-	base map[string]*istio_mixer_v1_config.AttributeManifest_AttributeInfo,
-	manifests ...*istio_mixer_v1_config.AttributeManifest) map[string]*istio_mixer_v1_config.AttributeManifest_AttributeInfo {
-	result := make(map[string]*istio_mixer_v1_config.AttributeManifest_AttributeInfo)
+	base map[string]*pb.AttributeManifest_AttributeInfo,
+	manifests ...*pb.AttributeManifest) map[string]*pb.AttributeManifest_AttributeInfo {
+	result := make(map[string]*pb.AttributeManifest_AttributeInfo)
 	for k, v := range base {
 		result[k] = v
 	}
@@ -191,7 +189,7 @@ func TestCreateInstanceBuilder(t *testing.T) {
 
 	for _, tst := range tests {
 		t.Run(tst.name, func(tt *testing.T) {
-			expb := compiled.NewBuilder(ast.NewFinder(defaultAttributeInfos))
+			expb := compiled.NewBuilder(attribute.NewFinder(defaultAttributeInfos))
 			builder, e := SupportedTmplInfo[tst.template].CreateInstanceBuilder("instance1", tst.param, expb)
 			assertErr(tt, "CreateInstanceBuilder", tst.expectCreateError, e)
 			if tst.expectCreateError != "" {
@@ -213,7 +211,7 @@ func TestCreateInstanceBuilder(t *testing.T) {
 }
 
 var defaultApaAttributes = map[string]interface{}{
-	"ats": time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+	"ats": time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 	"adr": 10 * time.Second,
 	"as":  "val as",
 	"as1": "val as1",
@@ -276,7 +274,7 @@ var defaultApaInstance = &sample_apa.Instance{
 	Name:                           "instance1",
 	StringPrimitive:                "val as",
 	Int64Primitive:                 int64(100),
-	TimeStamp:                      time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+	TimeStamp:                      time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 	Duration:                       10 * time.Second,
 	BoolPrimitive:                  true,
 	DoublePrimitive:                float64(42.42),
@@ -286,7 +284,7 @@ var defaultApaInstance = &sample_apa.Instance{
 	Res3Map: map[string]*sample_apa.Resource3{
 		"r3": {
 			StringPrimitive:                "val as2",
-			TimeStamp:                      time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+			TimeStamp:                      time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 			Duration:                       10 * time.Second,
 			DoublePrimitive:                float64(42.42),
 			BoolPrimitive:                  true,
@@ -313,7 +311,7 @@ func generateApaTests() []createInstanceTest {
 }
 
 var defaultQuotaAttributes = map[string]interface{}{
-	"ats": time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+	"ats": time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 	"adr": 10 * time.Second,
 	"as":  "val as",
 	"as1": "val as1",
@@ -373,7 +371,7 @@ var defaultQuotaInstance = &sample_quota.Instance{
 		Int64Primitive:  int64(100),
 		BoolPrimitive:   true,
 		DoublePrimitive: float64(42.42),
-		TimeStamp:       time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+		TimeStamp:       time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 		Duration:        10 * time.Second,
 		StringPrimitive: "val as2",
 		Int64Map:        map[string]int64{"i2": int64(200)},
@@ -411,7 +409,7 @@ func generateQuotaTests() []createInstanceTest {
 }
 
 var defaultCheckAttributes = map[string]interface{}{
-	"ats": time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+	"ats": time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 	"adr": 10 * time.Second,
 	"as":  "val as",
 	"as1": "val as1",
@@ -470,7 +468,7 @@ var defaultCheckInstance = &sample_check.Instance{
 	Res1: &sample_check.Res1{
 		StringPrimitive: "val as3",
 		Duration:        10 * time.Second,
-		TimeStamp:       time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+		TimeStamp:       time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 		DoublePrimitive: float64(42.42),
 		BoolPrimitive:   true,
 		Int64Primitive:  int64(100),
@@ -559,7 +557,7 @@ func generateCheckTests() []createInstanceTest {
 }
 
 var defaultReportAttributes = map[string]interface{}{
-	"ats": time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+	"ats": time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 	"adr": 10 * time.Second,
 	"ap1": []byte(net.ParseIP("2.3.4.5")),
 }
@@ -624,7 +622,7 @@ var defaultReportInstance = &sample_report.Instance{
 	Int64Primitive:  54362,
 	StringPrimitive: "mystring",
 	Int64Map:        map[string]int64{"a": int64(1)},
-	TimeStamp:       time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+	TimeStamp:       time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 	Duration:        10 * time.Second,
 	Res1: &sample_report.Res1{
 		Value:           int64(1),
@@ -634,7 +632,7 @@ var defaultReportInstance = &sample_report.Instance{
 		Int64Primitive:  54362,
 		StringPrimitive: "mystring",
 		Int64Map:        map[string]int64{"a": int64(1)},
-		TimeStamp:       time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+		TimeStamp:       time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 		Duration:        10 * time.Second,
 		Res2: &sample_report.Res2{
 			Value:          int64(1),
@@ -644,7 +642,7 @@ var defaultReportInstance = &sample_report.Instance{
 			Duration:       10 * time.Second,
 			EmailAddr:      adapter.EmailAddress("myEMAIL"),
 			IpAddr:         net.ParseIP("0.0.0.0"),
-			TimeStamp:      time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+			TimeStamp:      time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 			Uri:            adapter.URI("myURI"),
 		},
 		Res2Map: map[string]*sample_report.Res2{
@@ -656,7 +654,7 @@ var defaultReportInstance = &sample_report.Instance{
 				Duration:       10 * time.Second,
 				EmailAddr:      adapter.EmailAddress("myEMAIL"),
 				IpAddr:         net.ParseIP("0.0.0.0"),
-				TimeStamp:      time.Date(2017, time.January, 01, 0, 0, 0, 0, time.UTC),
+				TimeStamp:      time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC),
 				Uri:            adapter.URI("myURI"),
 			},
 		},

@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ func TestGetOpcodeSuccess(t *testing.T) {
 			t.Fatal("Should have found the opcode")
 		}
 		if e != v {
-			t.Fatalf("Value mimatch: E:%v, A:%v", e, v)
+			t.Fatalf("Value mismatch: E:%v, A:%v", e, v)
 		}
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,16 +23,18 @@ syntax = "proto3";
 // 
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: apikey
+// kind: instance
 // metadata:
 //   name: validate-apikey
 //   namespace: istio-system
 // spec:
-//   api: api.service | ""
-//   api_version: api.version | ""
-//   api_operation: api.operation | ""
-//   api_key: api.key | ""
-//   timestamp: request.time
+//   compiledTemplate: apikey
+//   params:
+//     api: api.service | ""
+//     api_version: api.version | ""
+//     api_operation: api.operation | ""
+//     api_key: api.key | ""
+//     timestamp: request.time
 // ```
 //
 // The `apikey` template represents a single API key, used to authorize API calls.
@@ -51,6 +53,7 @@ option (istio.mixer.adapter.model.v1beta1.template_name) = "apikey";
 option (gogoproto.goproto_getters_all) = false;
 option (gogoproto.equal_all) = false;
 option (gogoproto.gostring_all) = false;
+option (gogoproto.stable_marshaler_all) = true;
 
 // HandleApiKeyService is implemented by backends that wants to handle request-time 'apikey' instances.
 service HandleApiKeyService {

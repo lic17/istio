@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -101,15 +101,13 @@ func (du *dedupUtil) handleDedup(instance *quota.Instance, args adapter.QuotaArg
 // This is normally called on a regular basis via a go routine. It's also used directly
 // from tests to inject specific behaviors.
 func (du *dedupUtil) reapDedup() {
-	t := du.oldDedup
-	du.oldDedup = du.recentDedup
-	du.recentDedup = t
+	du.oldDedup, du.recentDedup = du.recentDedup, du.oldDedup
 
+	t := du.recentDedup
 	if len(t) > 0 {
 		du.logger.Debugf("Running repear to reclaim %d old deduplication entries", len(t))
 	}
 
-	// TODO: why isn't there a O(1) way to clear a map to the empty state?!
 	for k := range t {
 		delete(t, k)
 	}

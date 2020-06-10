@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,16 @@ package aggregate
 
 import (
 	"errors"
-	"fmt"
 
-	multierror "github.com/hashicorp/go-multierror"
+	"istio.io/pkg/ledger"
+
+	"github.com/hashicorp/go-multierror"
+
+	"istio.io/pkg/log"
 
 	"istio.io/istio/pilot/pkg/model"
+	"istio.io/istio/pkg/config/schema/collection"
+	"istio.io/istio/pkg/config/schema/resource"
 )
 
 var errorUnsupported = errors.New("unsupported operation: the config aggregator is read-only")
@@ -29,23 +34,43 @@ var errorUnsupported = errors.New("unsupported operation: the config aggregator 
 // Make creates an aggregate config store from several config stores and
 // unifies their descriptors
 func Make(stores []model.ConfigStore) (model.ConfigStore, error) {
-	union := model.ConfigDescriptor{}
-	storeTypes := make(map[string][]model.ConfigStore)
+	union := collection.NewSchemasBuilder()
+	storeTypes := make(map[resource.GroupVersionKind][]model.ConfigStore)
 	for _, store := range stores {
-		for _, descriptor := range store.ConfigDescriptor() {
-			if len(storeTypes[descriptor.Type]) == 0 {
-				union = append(union, descriptor)
+		for _, s := range store.Schemas().All() {
+			if len(storeTypes[s.Resource().GroupVersionKind()]) == 0 {
+				if err := union.Add(s); err != nil {
+					return nil, err
+				}
 			}
-			storeTypes[descriptor.Type] = append(storeTypes[descriptor.Type], store)
+			storeTypes[s.Resource().GroupVersionKind()] = append(storeTypes[s.Resource().GroupVersionKind()], store)
 		}
 	}
-	if err := union.Validate(); err != nil {
+
+	schemas := union.Build()
+	if err := schemas.Validate(); err != nil {
 		return nil, err
 	}
-	return &store{
-		descriptor: union,
-		stores:     storeTypes,
-	}, nil
+	result := &store{
+		schemas: schemas,
+		stores:  storeTypes,
+	}
+
+	var l ledger.Ledger
+	for _, store := range stores {
+		if l == nil {
+			l = store.GetLedger()
+			result.getVersion = store.Version
+			result.getResourceAtVersion = store.GetResourceAtVersion
+		} else {
+			err := store.SetLedger(l)
+			if err != nil {
+				log.Warnf("Config Store %v cannot track distribution in aggregate: %v", store, err)
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // MakeCache creates an aggregate config store cache from several config store
@@ -66,19 +91,42 @@ func MakeCache(caches []model.ConfigStoreCache) (model.ConfigStoreCache, error) 
 }
 
 type store struct {
-	// descriptor is the unified
-	descriptor model.ConfigDescriptor
+	// schemas is the unified
+	schemas collection.Schemas
 
 	// stores is a mapping from config type to a store
-	stores map[string][]model.ConfigStore
+	stores map[resource.GroupVersionKind][]model.ConfigStore
+
+	getVersion func() string
+
+	getResourceAtVersion func(version, key string) (resourceVersion string, err error)
+
+	ledger ledger.Ledger
 }
 
-func (cr *store) ConfigDescriptor() model.ConfigDescriptor {
-	return cr.descriptor
+func (cr *store) GetLedger() ledger.Ledger {
+	return cr.ledger
+}
+
+func (cr *store) SetLedger(l ledger.Ledger) error {
+	cr.ledger = l
+	return nil
+}
+
+func (cr *store) GetResourceAtVersion(version string, key string) (resourceVersion string, err error) {
+	return cr.getResourceAtVersion(version, key)
+}
+
+func (cr *store) Schemas() collection.Schemas {
+	return cr.schemas
+}
+
+func (cr *store) Version() string {
+	return cr.getVersion()
 }
 
 // Get the first config found in the stores.
-func (cr *store) Get(typ, name, namespace string) *model.Config {
+func (cr *store) Get(typ resource.GroupVersionKind, name, namespace string) *model.Config {
 	for _, store := range cr.stores[typ] {
 		config := store.Get(typ, name, namespace)
 		if config != nil {
@@ -89,9 +137,9 @@ func (cr *store) Get(typ, name, namespace string) *model.Config {
 }
 
 // List all configs in the stores.
-func (cr *store) List(typ, namespace string) ([]model.Config, error) {
+func (cr *store) List(typ resource.GroupVersionKind, namespace string) ([]model.Config, error) {
 	if len(cr.stores[typ]) == 0 {
-		return nil, fmt.Errorf("missing type %q", typ)
+		return nil, nil
 	}
 	var errs *multierror.Error
 	var configs []model.Config
@@ -115,15 +163,15 @@ func (cr *store) List(typ, namespace string) ([]model.Config, error) {
 	return configs, errs.ErrorOrNil()
 }
 
-func (cr *store) Delete(typ, name, namespace string) error {
+func (cr *store) Delete(_ resource.GroupVersionKind, _, _ string) error {
 	return errorUnsupported
 }
 
-func (cr *store) Create(config model.Config) (string, error) {
+func (cr *store) Create(model.Config) (string, error) {
 	return "", errorUnsupported
 }
 
-func (cr *store) Update(config model.Config) (string, error) {
+func (cr *store) Update(model.Config) (string, error) {
 	return "", errorUnsupported
 }
 
@@ -141,10 +189,10 @@ func (cr *storeCache) HasSynced() bool {
 	return true
 }
 
-func (cr *storeCache) RegisterEventHandler(typ string, handler func(model.Config, model.Event)) {
+func (cr *storeCache) RegisterEventHandler(kind resource.GroupVersionKind, handler func(model.Config, model.Config, model.Event)) {
 	for _, cache := range cr.caches {
-		if _, exists := cache.ConfigDescriptor().GetByType(typ); exists {
-			cache.RegisterEventHandler(typ, handler)
+		if _, exists := cache.Schemas().FindByGroupVersionKind(kind); exists {
+			cache.RegisterEventHandler(kind, handler)
 		}
 	}
 }

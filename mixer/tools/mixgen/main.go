@@ -1,4 +1,4 @@
-// Copyright 2016 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,10 +19,13 @@ import (
 
 	"istio.io/istio/mixer/cmd/shared"
 	"istio.io/istio/mixer/tools/mixgen/cmd"
+	"istio.io/pkg/version"
 )
 
 func main() {
 	rootCmd := cmd.GetRootCmd(os.Args[1:], shared.Printf, shared.Fatalf)
+
+	rootCmd.AddCommand(version.CobraCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(-1)

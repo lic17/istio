@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,84 +15,54 @@
 package v2
 
 import (
-	"fmt"
+	"time"
 
-	xdsapi "github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/gogo/protobuf/types"
-	"github.com/prometheus/client_golang/prometheus"
+	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+
+	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+
+	"istio.io/istio/pkg/util/protomarshal"
 
 	"istio.io/istio/pilot/pkg/model"
+	"istio.io/istio/pilot/pkg/networking/util"
 )
 
-func (s *DiscoveryServer) pushRoute(con *XdsConnection, push *model.PushContext) error {
-	rawRoutes, err := s.generateRawRoutes(con, push)
-	if err != nil {
-		return err
-	}
+func (s *DiscoveryServer) pushRoute(con *XdsConnection, push *model.PushContext, version string) error {
+	pushStart := time.Now()
+	rawRoutes := s.ConfigGenerator.BuildHTTPRoutes(con.node, push, con.Routes)
 	if s.DebugConfigs {
 		for _, r := range rawRoutes {
 			con.RouteConfigs[r.Name] = r
 			if adsLog.DebugEnabled() {
-				resp, _ := model.ToJSONWithIndent(r, " ")
-				adsLog.Debugf("RDS: Adding route %s for node %v", resp, con.modelNode)
+				resp, _ := protomarshal.ToJSONWithIndent(r, " ")
+				adsLog.Debugf("RDS: Adding route:%s for node:%v", resp, con.node.ID)
 			}
 		}
 	}
 
-	response := routeDiscoveryResponse(rawRoutes)
-	err = con.send(response)
+	response := routeDiscoveryResponse(rawRoutes, version, push.Version, con.node.RequestedTypes.RDS)
+	err := con.send(response)
+	rdsPushTime.Record(time.Since(pushStart).Seconds())
 	if err != nil {
-		adsLog.Warnf("ADS: RDS: Send failure %v: %v", con.modelNode.ID, err)
-		pushes.With(prometheus.Labels{"type": "rds_senderr"}).Add(1)
+		recordSendError("RDS", con.ConID, rdsSendErrPushes, err)
 		return err
 	}
-	pushes.With(prometheus.Labels{"type": "rds"}).Add(1)
+	rdsPushes.Increment()
 
-	adsLog.Infof("ADS: RDS: PUSH for node: %s addr:%s routes:%d", con.modelNode.ID, con.PeerAddr, len(rawRoutes))
+	adsLog.Infof("RDS: PUSH for node:%s routes:%d", con.node.ID, len(rawRoutes))
 	return nil
 }
 
-func (s *DiscoveryServer) generateRawRoutes(con *XdsConnection, push *model.PushContext) ([]*xdsapi.RouteConfiguration, error) {
-	rc := make([]*xdsapi.RouteConfiguration, 0)
-	// TODO: Follow this logic for other xDS resources as well
-	// TODO: once per config update
-	for _, routeName := range con.Routes {
-		r, err := s.ConfigGenerator.BuildHTTPRoutes(s.Env, con.modelNode, push, routeName)
-		if err != nil {
-			retErr := fmt.Errorf("RDS: Failed to generate route %s for node %v: %v", routeName, con.modelNode, err)
-			adsLog.Warnf("RDS: Failed to generate routes for route %s for node %v: %v", routeName, con.modelNode, err)
-			pushes.With(prometheus.Labels{"type": "rds_builderr"}).Add(1)
-			return nil, retErr
-		}
-
-		if r == nil {
-			adsLog.Warnf("RDS: got nil value for route %s for node %v: %v", routeName, con.modelNode, err)
-			continue
-		}
-
-		if err = r.Validate(); err != nil {
-			retErr := fmt.Errorf("RDS: Generated invalid route %s for node %v: %v", routeName, con.modelNode, err)
-			adsLog.Errorf("RDS: Generated invalid routes for route %s for node %v: %v, %v", routeName, con.modelNode, err, r)
-			pushes.With(prometheus.Labels{"type": "rds_builderr"}).Add(1)
-			// Generating invalid routes is a bug.
-			// Panic instead of trying to recover from that, since we can't
-			// assume anything about the state.
-			panic(retErr.Error())
-		}
-		rc = append(rc, r)
-	}
-	return rc, nil
-}
-
-func routeDiscoveryResponse(rs []*xdsapi.RouteConfiguration) *xdsapi.DiscoveryResponse {
-	resp := &xdsapi.DiscoveryResponse{
-		TypeUrl:     RouteType,
-		VersionInfo: versionInfo(),
-		Nonce:       nonce(),
+func routeDiscoveryResponse(rs []*route.RouteConfiguration, version, noncePrefix, typeURL string) *discovery.DiscoveryResponse {
+	resp := &discovery.DiscoveryResponse{
+		TypeUrl:     typeURL,
+		VersionInfo: version,
+		Nonce:       nonce(noncePrefix),
 	}
 	for _, rc := range rs {
-		rr, _ := types.MarshalAny(rc)
-		resp.Resources = append(resp.Resources, *rr)
+		rr := util.MessageToAny(rc)
+		rr.TypeUrl = typeURL
+		resp.Resources = append(resp.Resources, rr)
 	}
 
 	return resp

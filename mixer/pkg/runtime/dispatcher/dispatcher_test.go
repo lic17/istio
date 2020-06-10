@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,21 +21,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogo/googleapis/google/rpc"
 	"github.com/gogo/protobuf/types"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	rpc "istio.io/gogo-genproto/googleapis/google/rpc"
 
 	tpb "istio.io/api/mixer/adapter/model/v1beta1"
 	v1 "istio.io/api/mixer/v1"
 	"istio.io/api/policy/v1beta1"
 	"istio.io/istio/mixer/pkg/adapter"
-	"istio.io/istio/mixer/pkg/attribute"
-	"istio.io/istio/mixer/pkg/pool"
 	"istio.io/istio/mixer/pkg/runtime/config"
 	"istio.io/istio/mixer/pkg/runtime/handler"
 	"istio.io/istio/mixer/pkg/runtime/routing"
 	"istio.io/istio/mixer/pkg/runtime/testing/data"
 	"istio.io/istio/mixer/pkg/status"
-	"istio.io/istio/pkg/log"
+	"istio.io/pkg/attribute"
+	"istio.io/pkg/log"
+	"istio.io/pkg/pool"
 )
 
 var gp = pool.NewGoroutinePool(10, true)
@@ -56,9 +59,6 @@ var tests = []struct {
 	// attributes to use. If left empty, a default bag will be used.
 	attr map[string]interface{}
 
-	// the variety of the operation to apply.
-	variety tpb.TemplateVariety
-
 	// quota method arguments to pass
 	qma *QuotaMethodArgs
 
@@ -74,6 +74,9 @@ var tests = []struct {
 
 	// expected adapter/template log.
 	log string
+
+	// the variety of the operation to apply.
+	variety tpb.TemplateVariety
 
 	// print out the full log for this test. Useful for debugging.
 	fullLog bool
@@ -1001,7 +1004,7 @@ func TestDispatcher(t *testing.T) {
 			cfg := data.JoinConfigs(tst.config...)
 
 			s, _ := config.GetSnapshotForTest(templates, adapters, data.ServiceConfig, cfg)
-			h := handler.NewTable(handler.Empty(), s, pool.NewGoroutinePool(1, false))
+			h := handler.NewTable(handler.Empty(), s, pool.NewGoroutinePool(1, false), []string{metav1.NamespaceAll})
 
 			r := routing.BuildTable(h, s, "istio-system", true)
 			_ = dispatcher.ChangeRoute(r)
@@ -1073,7 +1076,8 @@ func TestDispatcher(t *testing.T) {
 			if tst.err != "" {
 				if err == nil {
 					tt.Fatalf("expected error was not thrown")
-				} else if strings.TrimSpace(tst.err) != strings.TrimSpace(err.Error()) && !strings.Contains(err.Error(), tst.err) {
+				} else if !reflect.DeepEqual(strings.Fields(tst.err), strings.Fields(err.Error())) &&
+					!strings.Contains(err.Error(), tst.err) {
 					tt.Fatalf("error mismatch: '%v' != '%v'", err, tst.err)
 				}
 			} else {

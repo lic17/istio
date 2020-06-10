@@ -1,3 +1,17 @@
+// Copyright Istio Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spiffe
 
 import (
@@ -18,20 +32,24 @@ func TestGenSpiffeURI(t *testing.T) {
 	}{
 		{
 			serviceAccount: "sa",
-			expectedError:  "namespace or service account can't be empty",
+			trustDomain:    defaultTrustDomain,
+			expectedError:  "namespace or service account empty for SPIFFE uri",
 		},
 		{
 			namespace:     "ns",
-			expectedError: "namespace or service account can't be empty",
+			trustDomain:   defaultTrustDomain,
+			expectedError: "namespace or service account empty for SPIFFE uri",
 		},
 		{
 			namespace:      "namespace-foo",
 			serviceAccount: "service-bar",
+			trustDomain:    defaultTrustDomain,
 			expectedURI:    "spiffe://cluster.local/ns/namespace-foo/sa/service-bar",
 		},
 		{
 			namespace:      "foo",
 			serviceAccount: "bar",
+			trustDomain:    defaultTrustDomain,
 			expectedURI:    "spiffe://cluster.local/ns/foo/sa/bar",
 		},
 		{
@@ -42,12 +60,7 @@ func TestGenSpiffeURI(t *testing.T) {
 		},
 	}
 	for id, tc := range testCases {
-		if tc.trustDomain == "" {
-			SetTrustDomain(defaultTrustDomain)
-		} else {
-			SetTrustDomain(tc.trustDomain)
-		}
-
+		SetTrustDomain(tc.trustDomain)
 		got, err := GenSpiffeURI(tc.namespace, tc.serviceAccount)
 		if tc.expectedError == "" && err != nil {
 			t.Errorf("teste case [%v] failed, error %v", id, tc)
@@ -63,7 +76,6 @@ func TestGenSpiffeURI(t *testing.T) {
 		if got != tc.expectedURI {
 			t.Errorf("unexpected subject name, want %v, got %v", tc.expectedURI, got)
 		}
-
 	}
 }
 
@@ -115,24 +127,17 @@ func TestGenCustomSpiffe(t *testing.T) {
 			expectedURI: "spiffe://mesh.com/foo",
 		},
 		{
-
 			//identity is empty
 			trustDomain: "mesh.com",
 			expectedURI: "",
 		},
 	}
 	for id, tc := range testCases {
-		if tc.trustDomain == "" {
-			SetTrustDomain(defaultTrustDomain)
-		} else {
-			SetTrustDomain(tc.trustDomain)
-		}
-
+		SetTrustDomain(tc.trustDomain)
 		got := GenCustomSpiffe(tc.identity)
 
 		if got != tc.expectedURI {
 			t.Errorf("Test id: %v , unexpected subject name, want %v, got %v", id, tc.expectedURI, got)
 		}
-
 	}
 }

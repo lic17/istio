@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,9 +30,8 @@ import (
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 
 	"istio.io/api/policy/v1beta1"
-	"istio.io/istio/mixer/pkg/attribute"
-	"istio.io/istio/mixer/pkg/il"
 	"istio.io/istio/mixer/pkg/lang"
+	"istio.io/pkg/attribute"
 )
 
 func convertType(typ v1beta1.ValueType) *exprpb.Type {
@@ -114,7 +113,7 @@ func recoverType(typ *exprpb.Type) v1beta1.ValueType {
 func convertValue(typ v1beta1.ValueType, value interface{}) ref.Val {
 	switch typ {
 	case v1beta1.STRING, v1beta1.INT64, v1beta1.DOUBLE, v1beta1.BOOL:
-		return types.NativeToValue(value)
+		return types.DefaultTypeAdapter.NativeToValue(value)
 	case v1beta1.TIMESTAMP:
 		t := value.(time.Time)
 		tproto, err := ptypes.TimestampProto(t)
@@ -126,7 +125,7 @@ func convertValue(typ v1beta1.ValueType, value interface{}) ref.Val {
 		d := value.(time.Duration)
 		return types.Duration{Duration: ptypes.DurationProto(d)}
 	case v1beta1.STRING_MAP:
-		sm := value.(il.StringMap)
+		sm := value.(attribute.StringMap)
 		return stringMapValue{value: sm}
 	case v1beta1.IP_ADDRESS:
 		return wrapperValue{typ: typ, bytes: value.([]byte)}
@@ -158,6 +157,12 @@ func recoverValue(value ref.Val) (interface{}, error) {
 		}
 		return value.Value(), nil
 	case wrapperType:
+		return value.Value(), nil
+	case types.ListType:
+		size := value.(traits.Sizer).Size()
+		if size.Type() == types.IntType && size.Value().(int64) == 0 {
+			return []string{}, nil
+		}
 		return value.Value(), nil
 	}
 	return nil, fmt.Errorf("failed to recover of type %s", value.Type())
@@ -203,7 +208,7 @@ const (
 )
 
 type stringMapValue struct {
-	value il.StringMap
+	value attribute.StringMap
 }
 
 func (v stringMapValue) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {

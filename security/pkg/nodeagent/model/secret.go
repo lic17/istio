@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,11 @@ type SecretItem struct {
 
 	RootCert []byte
 
+	// RootCertOwnedByCompoundSecret is true if this SecretItem was created by a
+	// K8S secret having both server cert/key and client ca and should be deleted
+	// with the secret.
+	RootCertOwnedByCompoundSecret bool
+
 	// ResourceName passed from envoy SDS discovery request.
 	// "ROOTCA" for root cert request, "default" for key/cert request.
 	ResourceName string
@@ -37,4 +42,6 @@ type SecretItem struct {
 	Version string
 
 	CreatedTime time.Time
+
+	ExpireTime time.Time
 }

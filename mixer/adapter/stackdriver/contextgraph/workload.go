@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -130,10 +130,8 @@ func (wi workloadInstance) Reify(logger adapter.Logger) ([]entity, []edge) {
 		} else {
 			logger.Warningf("Couldn't parse owner into k8s obj: %s", wi.owner)
 		}
-	} else {
-		if wi.owner != "unknown" {
-			logger.Warningf("Unknown owner type: %s", wi.owner)
-		}
+	} else if wi.owner != "unknown" {
+		logger.Warningf("Unknown owner type: %s", wi.owner)
 	}
 	// TODO: Non-k8s owners.
 
@@ -148,10 +146,8 @@ func (wi workloadInstance) Reify(logger adapter.Logger) ([]entity, []edge) {
 		} else {
 			logger.Warningf("Unknown workload instance type: %s", wi.uid)
 		}
-	} else {
-		if wi.uid != "Unknown" {
-			logger.Warningf("Unknown workload instance type: %s", wi.uid)
-		}
+	} else if wi.uid != "Unknown" {
+		logger.Warningf("Unknown workload instance type: %s", wi.uid)
 	}
 	// TODO: Non-k8s workload instances
 

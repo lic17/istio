@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogo/status"
 	"github.com/google/go-cmp/cmp"
+
+	"istio.io/istio/pkg/mcp/status"
 
 	mcp "istio.io/api/mcp/v1alpha1"
 )
@@ -39,12 +40,7 @@ func TestJournal(t *testing.T) {
 
 		j.RecordRequestResources(req)
 
-		want = append(want, RecentRequestInfo{Request: &JournaledRequest{
-			Collection:    req.Collection,
-			ResponseNonce: req.ResponseNonce,
-			ErrorDetail:   req.ErrorDetail,
-			SinkNode:      req.SinkNode,
-		}})
+		want = append(want, RecentRequestInfo{Request: req})
 	}
 	want = want[wrap:]
 
@@ -58,17 +54,12 @@ func TestJournal(t *testing.T) {
 	errorDetails, _ := status.FromError(errors.New("error"))
 	req := &mcp.RequestResources{
 		Collection:    "foo",
-		ResponseNonce: fmt.Sprintf("nonce-error"),
+		ResponseNonce: "nonce-error",
 		ErrorDetail:   errorDetails.Proto(),
 	}
 	j.RecordRequestResources(req)
 
-	want = append(want, RecentRequestInfo{Request: &JournaledRequest{
-		Collection:    req.Collection,
-		ResponseNonce: req.ResponseNonce,
-		ErrorDetail:   req.ErrorDetail,
-		SinkNode:      req.SinkNode,
-	}})
+	want = append(want, RecentRequestInfo{Request: req})
 	want = want[1:]
 
 	got = j.Snapshot()

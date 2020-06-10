@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,16 +28,18 @@ import (
 //
 // ```yaml
 // apiVersion: "config.istio.io/v1alpha2"
-// kind: quota
+// kind: instance
 // metadata:
 //   name: requestcount
 //   namespace: istio-system
 // spec:
-//   dimensions:
-//     source: source.labels["app"] | source.service | "unknown"
-//     sourceVersion: source.labels["version"] | "unknown"
-//     destination: destination.labels["app"] | destination.service | "unknown"
-//     destinationVersion: destination.labels["version"] | "unknown"
+//   compiledTemplate: quota
+//   params:
+//     dimensions:
+//       source: source.name | "unknown"
+//       sourceVersion: source.labels["version"] | "unknown"
+//       destination: destination.labels["app"] | destination.service.host | "unknown"
+//       destinationVersion: destination.labels["version"] | "unknown"
 // ```
 
 // Fully qualified name of the template

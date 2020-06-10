@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -203,7 +203,7 @@ func TestBadConfig(t *testing.T) {
 	b.SetAdapterConfig(cfg)
 
 	cfg.MinDeduplicationDuration = 0
-	if err := b.Validate; err == nil {
+	if err := b.Validate(); err == nil {
 		t.Error("Expecting failure, got success")
 	}
 

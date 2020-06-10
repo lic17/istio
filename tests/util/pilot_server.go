@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,26 +22,19 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gogo/protobuf/types"
-	"k8s.io/apimachinery/pkg/util/wait"
+	"istio.io/pkg/log"
 
 	"istio.io/istio/pilot/pkg/bootstrap"
-	"istio.io/istio/pilot/pkg/proxy/envoy"
-	"istio.io/istio/pilot/pkg/serviceregistry"
+	"istio.io/istio/pkg/config/mesh"
 	"istio.io/istio/pkg/keepalive"
-	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/test/env"
+
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 var (
 	// MockPilotGrpcAddr is the address to be used for grpc connections.
 	MockPilotGrpcAddr string
-
-	// MockPilotSecureAddr is the address to be used for secure grpc connections.
-	MockPilotSecureAddr string
-
-	// MockPilotSecurePort is the secure port
-	MockPilotSecurePort int
 
 	// MockPilotHTTPPort is the dynamic port for pilot http
 	MockPilotHTTPPort int
@@ -58,7 +51,7 @@ type TearDownFunc func()
 func EnsureTestServer(args ...func(*bootstrap.PilotArgs)) (*bootstrap.Server, TearDownFunc) {
 	server, tearDown, err := setup(args...)
 	if err != nil {
-		log.Errora("Failed to start in-process server", err)
+		log.Errora("Failed to start in-process server: ", err)
 		panic(err)
 	}
 	return server, tearDown
@@ -79,45 +72,34 @@ func setup(additionalArgs ...func(*bootstrap.PilotArgs)) (*bootstrap.Server, Tea
 	}
 	httpAddr := ":" + pilotHTTP
 
-	// Create a test pilot discovery service configured to watch the tempDir.
-	args := bootstrap.PilotArgs{
-		Namespace: "testing",
-		DiscoveryOptions: envoy.DiscoveryServiceOptions{
+	meshConfig := mesh.DefaultMeshConfig()
+	meshConfig.EnableAutoMtls.Value = false
+	additionalArgs = append([]func(p *bootstrap.PilotArgs){func(p *bootstrap.PilotArgs) {
+		p.Namespace = "testing"
+		p.DiscoveryOptions = bootstrap.DiscoveryServiceOptions{
 			HTTPAddr:        httpAddr,
 			GrpcAddr:        ":0",
-			SecureGrpcAddr:  ":0",
-			EnableCaching:   true,
 			EnableProfiling: true,
-		},
+		}
 		//TODO: start mixer first, get its address
-		Mesh: bootstrap.MeshArgs{
-			MixerAddress:    "istio-mixer.istio-system:9091",
-			RdsRefreshDelay: types.DurationProto(10 * time.Millisecond),
-		},
-		Config: bootstrap.ConfigArgs{
-			KubeConfig: env.IstioSrc + "/.circleci/config",
-		},
-		Service: bootstrap.ServiceArgs{
-			// Using the Mock service registry, which provides the hello and world services.
-			Registries: []string{
-				string(serviceregistry.MockRegistry)},
-		},
-		MCPMaxMessageSize: bootstrap.DefaultMCPMaxMsgSize,
-		KeepaliveOptions:  keepalive.DefaultOption(),
-		ForceStop:         true,
+		p.Mesh = bootstrap.MeshArgs{
+			MixerAddress: "istio-mixer.istio-system:9091",
+		}
+		p.Config = bootstrap.ConfigArgs{
+			KubeConfig: env.IstioSrc + "/tests/util/kubeconfig",
+			// Static testdata, should include all configs we want to test.
+			FileDir: env.IstioSrc + "/tests/testdata/config",
+		}
+		p.MeshConfig = &meshConfig
+		p.MCPOptions.MaxMessageSize = 1024 * 1024 * 4
+		p.KeepaliveOptions = keepalive.DefaultOption()
+
 		// TODO: add the plugins, so local tests are closer to reality and test full generation
 		// Plugins:           bootstrap.DefaultPlugins,
-	}
-	// Static testdata, should include all configs we want to test.
-	args.Config.FileDir = env.IstioSrc + "/tests/testdata/config"
+	}}, additionalArgs...)
+	args := bootstrap.NewPilotArgs(additionalArgs...)
 
-	bootstrap.PilotCertDir = env.IstioSrc + "/tests/testdata/certs/pilot"
-
-	for _, apply := range additionalArgs {
-		apply(&args)
-	}
-
-	// Create and setup the controller.
+	// Create a test Istiod Server.
 	s, err := bootstrap.NewServer(args)
 	if err != nil {
 		return nil, nil, err
@@ -130,26 +112,19 @@ func setup(additionalArgs ...func(*bootstrap.PilotArgs)) (*bootstrap.Server, Tea
 	}
 
 	// Extract the port from the network address.
-	_, port, err := net.SplitHostPort(s.HTTPListeningAddr.String())
+	_, port, err := net.SplitHostPort(s.HTTPListener.Addr().String())
 	if err != nil {
 		return nil, nil, err
 	}
 	httpURL := "http://localhost:" + port
 	MockPilotHTTPPort, _ = strconv.Atoi(port)
 
-	_, port, err = net.SplitHostPort(s.GRPCListeningAddr.String())
+	_, port, err = net.SplitHostPort(s.GRPCListener.Addr().String())
 	if err != nil {
 		return nil, nil, err
 	}
 	MockPilotGrpcAddr = "localhost:" + port
 	MockPilotGrpcPort, _ = strconv.Atoi(port)
-
-	_, port, err = net.SplitHostPort(s.SecureGRPCListeningAddr.String())
-	if err != nil {
-		return nil, nil, err
-	}
-	MockPilotSecureAddr = "localhost:" + port
-	MockPilotSecurePort, _ = strconv.Atoi(port)
 
 	// Wait a bit for the server to come up.
 	err = wait.Poll(500*time.Millisecond, 5*time.Second, func() (bool, error) {
@@ -158,8 +133,8 @@ func setup(additionalArgs ...func(*bootstrap.PilotArgs)) (*bootstrap.Server, Tea
 		if err != nil {
 			return false, nil
 		}
-		defer resp.Body.Close()
-		ioutil.ReadAll(resp.Body)
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = ioutil.ReadAll(resp.Body)
 		if resp.StatusCode == http.StatusOK {
 			return true, nil
 		}

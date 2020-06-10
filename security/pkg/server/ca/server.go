@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,12 +26,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"k8s.io/client-go/kubernetes"
 
-	"istio.io/istio/pkg/log"
-	"istio.io/istio/security/pkg/pki/ca"
+	"istio.io/pkg/log"
+
+	caerror "istio.io/istio/security/pkg/pki/error"
 	"istio.io/istio/security/pkg/pki/util"
-	"istio.io/istio/security/pkg/registry"
 	"istio.io/istio/security/pkg/server/ca/authenticate"
 	pb "istio.io/istio/security/proto"
 )
@@ -40,26 +42,43 @@ import (
 const (
 	jwtPath              = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 	caCertPath           = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	k8sAPIServerURL      = "https://kubernetes.default.svc/apis/authentication.k8s.io/v1/tokenreviews"
 	certExpirationBuffer = time.Minute
 )
 
-type authenticator interface {
-	Authenticate(ctx context.Context) (*authenticate.Caller, error)
+var serverCaLog = log.RegisterScope("serverca", "Citadel server log", 0)
+
+// CertificateAuthority contains methods to be supported by a CA.
+type CertificateAuthority interface {
+	// Sign generates a certificate for a workload or CA, from the given CSR and TTL.
+	// TODO(myidpt): simplify this interface and pass a struct with cert field values instead.
+	Sign(csrPEM []byte, subjectIDs []string, ttl time.Duration, forCA bool) ([]byte, error)
+	// SignWithCertChain is similar to Sign but returns the leaf cert and the entire cert chain.
+	SignWithCertChain(csrPEM []byte, subjectIDs []string, ttl time.Duration, forCA bool) ([]byte, error)
+	// GetCAKeyCertBundle returns the KeyCertBundle used by CA.
+	GetCAKeyCertBundle() util.KeyCertBundle
 }
 
 // Server implements IstioCAService and IstioCertificateService and provides the services on the
 // specified port.
 type Server struct {
-	authenticators []authenticator
-	authorizer     authorizer
-	serverCertTTL  time.Duration
-	ca             ca.CertificateAuthority
-	certificate    *tls.Certificate
-	hostnames      []string
-	forCA          bool
-	port           int
 	monitoring     monitoringMetrics
+	Authenticators []authenticate.Authenticator
+	hostnames      []string
+	ca             CertificateAuthority
+	serverCertTTL  time.Duration
+	certificate    *tls.Certificate
+	port           int
+	forCA          bool
+	grpcServer     *grpc.Server
+}
+
+func getConnectionAddress(ctx context.Context) string {
+	peerInfo, ok := peer.FromContext(ctx)
+	peerAddr := "unknown"
+	if ok {
+		peerAddr = peerInfo.Addr.String()
+	}
+	return peerAddr
 }
 
 // CreateCertificate handles an incoming certificate signing request (CSR). It does
@@ -70,10 +89,10 @@ type Server struct {
 // it is signed by the CA signing key.
 func (s *Server) CreateCertificate(ctx context.Context, request *pb.IstioCertificateRequest) (
 	*pb.IstioCertificateResponse, error) {
+	s.monitoring.CSR.Increment()
 	caller := s.authenticate(ctx)
 	if caller == nil {
-		log.Warn("request authentication failure")
-		s.monitoring.AuthnError.Inc()
+		s.monitoring.AuthnError.Increment()
 		return nil, status.Error(codes.Unauthenticated, "request authenticate failure")
 	}
 
@@ -83,9 +102,9 @@ func (s *Server) CreateCertificate(ctx context.Context, request *pb.IstioCertifi
 	cert, signErr := s.ca.Sign(
 		[]byte(request.Csr), caller.Identities, time.Duration(request.ValidityDuration)*time.Second, false)
 	if signErr != nil {
-		log.Errorf("CSR signing error (%v)", signErr.Error())
-		s.monitoring.GetCertSignError(signErr.(*ca.Error).ErrorType()).Inc()
-		return nil, status.Errorf(signErr.(*ca.Error).HTTPErrorCode(), "CSR signing error (%v)", signErr.(*ca.Error))
+		serverCaLog.Errorf("CSR signing error (%v)", signErr.Error())
+		s.monitoring.GetCertSignError(signErr.(*caerror.Error).ErrorType()).Increment()
+		return nil, status.Errorf(signErr.(*caerror.Error).HTTPErrorCode(), "CSR signing error (%v)", signErr.(*caerror.Error))
 	}
 	respCertChain := []string{string(cert)}
 	if len(certChainBytes) != 0 {
@@ -95,9 +114,28 @@ func (s *Server) CreateCertificate(ctx context.Context, request *pb.IstioCertifi
 	response := &pb.IstioCertificateResponse{
 		CertChain: respCertChain,
 	}
-	log.Debug("CSR successfully signed.")
+	s.monitoring.Success.Increment()
+	serverCaLog.Debug("CSR successfully signed.")
 
 	return response, nil
+}
+
+func recordCertsExpiry(keyCertBundle util.KeyCertBundle) {
+	rootCertExpiry, err := keyCertBundle.ExtractRootCertExpiryTimestamp()
+	if err != nil {
+		serverCaLog.Errorf("failed to extract root cert expiry timestamp (error %v)", err)
+	}
+	rootCertExpiryTimestamp.Record(rootCertExpiry)
+
+	if len(keyCertBundle.GetCertChainPem()) == 0 {
+		return
+	}
+
+	certChainExpiry, err := keyCertBundle.ExtractCACertExpiryTimestamp()
+	if err != nil {
+		serverCaLog.Errorf("failed to extract CA cert expiry timestamp (error %v)", err)
+	}
+	certChainExpiryTimestamp.Record(certChainExpiry)
 }
 
 // HandleCSR handles an incoming certificate signing request (CSR). It does
@@ -106,36 +144,37 @@ func (s *Server) CreateCertificate(ctx context.Context, request *pb.IstioCertifi
 // to sign is returned as part of the response object.
 // [TODO](myidpt): Deprecate this function.
 func (s *Server) HandleCSR(ctx context.Context, request *pb.CsrRequest) (*pb.CsrResponse, error) {
-	s.monitoring.CSR.Inc()
+	s.monitoring.CSR.Increment()
 	caller := s.authenticate(ctx)
-	if caller == nil {
-		log.Warn("request authentication failure")
-		s.monitoring.AuthnError.Inc()
-		return nil, status.Error(codes.Unauthenticated, "request authenticate failure")
+	if caller == nil || len(caller.Identities) == 0 {
+		serverCaLog.Warn("request authentication failure, no caller identity")
+		s.monitoring.AuthnError.Increment()
+		return nil, status.Error(codes.Unauthenticated, "request authenticate failure, no caller identity")
 	}
 
 	csr, err := util.ParsePemEncodedCSR(request.CsrPem)
 	if err != nil {
-		log.Warnf("CSR Pem parsing error (error %v)", err)
-		s.monitoring.CSRError.Inc()
+		serverCaLog.Warnf("CSR Pem parsing error (error %v)", err)
+		s.monitoring.CSRError.Increment()
 		return nil, status.Errorf(codes.InvalidArgument, "CSR parsing error (%v)", err)
 	}
 
 	_, err = util.ExtractIDs(csr.Extensions)
 	if err != nil {
-		log.Warnf("CSR identity extraction error (%v)", err)
-		s.monitoring.IDExtractionError.Inc()
+		serverCaLog.Warnf("CSR identity extraction error (%v)", err)
+		s.monitoring.IDExtractionError.Increment()
 		return nil, status.Errorf(codes.InvalidArgument, "CSR identity extraction error (%v)", err)
 	}
 
 	// TODO: Call authorizer.
 
 	_, _, certChainBytes, _ := s.ca.GetCAKeyCertBundle().GetAll()
-	cert, signErr := s.ca.Sign(request.CsrPem, []string{}, time.Duration(request.RequestedTtlMinutes)*time.Minute, s.forCA)
+	cert, signErr := s.ca.Sign(
+		request.CsrPem, caller.Identities, time.Duration(request.RequestedTtlMinutes)*time.Minute, s.forCA)
 	if signErr != nil {
-		log.Errorf("CSR signing error (%v)", signErr.Error())
-		s.monitoring.GetCertSignError(signErr.(*ca.Error).ErrorType()).Inc()
-		return nil, status.Errorf(codes.Internal, "CSR signing error (%v)", signErr.(*ca.Error))
+		serverCaLog.Errorf("CSR signing error (%v)", signErr.Error())
+		s.monitoring.GetCertSignError(signErr.(*caerror.Error).ErrorType()).Increment()
+		return nil, status.Errorf(codes.Internal, "CSR signing error (%v)", signErr.(*caerror.Error))
 	}
 
 	response := &pb.CsrResponse{
@@ -143,84 +182,92 @@ func (s *Server) HandleCSR(ctx context.Context, request *pb.CsrRequest) (*pb.Csr
 		SignedCert: cert,
 		CertChain:  certChainBytes,
 	}
-	log.Debug("CSR successfully signed.")
-	s.monitoring.Success.Inc()
+	serverCaLog.Debug("CSR successfully signed.")
+	s.monitoring.Success.Increment()
 
 	return response, nil
 }
 
 // Run starts a GRPC server on the specified port.
 func (s *Server) Run() error {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
-	if err != nil {
-		return fmt.Errorf("cannot listen on port %d (error: %v)", s.port, err)
+	grpcServer := s.grpcServer
+	var listener net.Listener
+	var err error
+
+	if grpcServer == nil {
+		listener, err = net.Listen("tcp", fmt.Sprintf(":%d", s.port))
+		if err != nil {
+			return fmt.Errorf("cannot listen on port %d (error: %v)", s.port, err)
+		}
+
+		var grpcOptions []grpc.ServerOption
+		grpcOptions = append(grpcOptions, s.createTLSServerOption(), grpc.UnaryInterceptor(grpc_prometheus.UnaryServerInterceptor))
+
+		grpcServer = grpc.NewServer(grpcOptions...)
 	}
-
-	var grpcOptions []grpc.ServerOption
-	grpcOptions = append(grpcOptions, s.createTLSServerOption())
-	grpcOptions = append(grpcOptions, grpc.UnaryInterceptor(grpc_prometheus.UnaryServerInterceptor))
-
-	grpcServer := grpc.NewServer(grpcOptions...)
 	pb.RegisterIstioCAServiceServer(grpcServer, s)
 	pb.RegisterIstioCertificateServiceServer(grpcServer, s)
 
 	grpc_prometheus.EnableHandlingTimeHistogram()
 	grpc_prometheus.Register(grpcServer)
 
-	// grpcServer.Serve() is a blocking call, so run it in a goroutine.
-	go func() {
-		log.Infof("Starting GRPC server on port %d", s.port)
+	if listener != nil {
+		// grpcServer.Serve() is a blocking call, so run it in a goroutine.
+		go func() {
+			serverCaLog.Infof("Starting GRPC server on port %d", s.port)
 
-		err := grpcServer.Serve(listener)
+			err := grpcServer.Serve(listener)
 
-		// grpcServer.Serve() always returns a non-nil error.
-		log.Warnf("GRPC server returns an error: %v", err)
-	}()
+			// grpcServer.Serve() always returns a non-nil error.
+			serverCaLog.Warnf("GRPC server returns an error: %v", err)
+		}()
+	}
 
 	return nil
 }
 
 // New creates a new instance of `IstioCAServiceServer`.
-func New(ca ca.CertificateAuthority, ttl time.Duration, forCA bool, hostlist []string, port int, trustDomain string) (*Server, error) {
+func New(ca CertificateAuthority, ttl time.Duration, forCA bool,
+	hostlist []string, port int, trustDomain string, sdsEnabled bool, jwtPolicy, clusterID string) (*Server, error) {
+	return NewWithGRPC(nil, ca, ttl, forCA, hostlist, port, trustDomain, sdsEnabled, jwtPolicy, clusterID, nil, nil)
+}
+
+// New creates a new instance of `IstioCAServiceServer`, running inside an existing gRPC server.
+func NewWithGRPC(grpc *grpc.Server, ca CertificateAuthority, ttl time.Duration, forCA bool,
+	hostlist []string, port int, trustDomain string, sdsEnabled bool, jwtPolicy, clusterID string,
+	kubeClient kubernetes.Interface,
+	remoteKubeClientGetter authenticate.RemoteKubeClientGetter) (*Server, error) {
+
 	if len(hostlist) == 0 {
 		return nil, fmt.Errorf("failed to create grpc server hostlist empty")
 	}
 	// Notice that the order of authenticators matters, since at runtime
 	// authenticators are activated sequentially and the first successful attempt
 	// is used as the authentication result.
-	authenticators := []authenticator{&authenticate.ClientCertAuthenticator{}}
-	log.Info("added client certificate authenticator")
+	authenticators := []authenticate.Authenticator{&authenticate.ClientCertAuthenticator{}}
+	serverCaLog.Info("added client certificate authenticator")
 
-	authenticator, err := authenticate.NewKubeJWTAuthenticator(k8sAPIServerURL, caCertPath, jwtPath, trustDomain)
-	if err == nil {
+	// Only add k8s jwt authenticator if SDS is enabled.
+	if sdsEnabled {
+		authenticator := authenticate.NewKubeJWTAuthenticator(kubeClient, clusterID, remoteKubeClientGetter,
+			trustDomain, jwtPolicy)
 		authenticators = append(authenticators, authenticator)
-		log.Info("added K8s JWT authenticator")
-	} else {
-		log.Warnf("failed to add create JWT authenticator: %v", err)
+		serverCaLog.Info("added K8s JWT authenticator")
 	}
 
-	// Temporarily disable ID token authenticator by resetting the hostlist.
-	// [TODO](myidpt): enable ID token authenticator when the CSR API authz can work correctly.
-	hostlistForJwtAuth := make([]string, 0)
-	for _, host := range hostlistForJwtAuth {
-		aud := fmt.Sprintf("grpc://%s:%d", host, port)
-		if jwtAuthenticator, err := authenticate.NewIDTokenAuthenticator(aud); err != nil {
-			log.Errorf("failed to create JWT authenticator (error %v)", err)
-		} else {
-			authenticators = append(authenticators, jwtAuthenticator)
-			log.Infof("added generatl JWT authenticator")
-		}
-	}
-	return &Server{
-		authenticators: authenticators,
-		authorizer:     &registryAuthorizor{registry.GetIdentityRegistry()},
+	recordCertsExpiry(ca.GetCAKeyCertBundle())
+
+	server := &Server{
+		Authenticators: authenticators,
 		serverCertTTL:  ttl,
 		ca:             ca,
 		hostnames:      hostlist,
 		forCA:          forCA,
 		port:           port,
+		grpcServer:     grpc,
 		monitoring:     newMonitoringMetrics(),
-	}, nil
+	}
+	return server, nil
 }
 
 func (s *Server) createTLSServerOption() grpc.ServerOption {
@@ -234,7 +281,7 @@ func (s *Server) createTLSServerOption() grpc.ServerOption {
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			if s.certificate == nil || shouldRefresh(s.certificate) {
 				// Apply new certificate if there isn't one yet, or the one has become invalid.
-				newCert, err := s.applyServerCertificate()
+				newCert, err := s.getServerCertificate()
 				if err != nil {
 					return nil, fmt.Errorf("failed to apply TLS server certificate (%v)", err)
 				}
@@ -246,19 +293,34 @@ func (s *Server) createTLSServerOption() grpc.ServerOption {
 	return grpc.Creds(credentials.NewTLS(config))
 }
 
-func (s *Server) applyServerCertificate() (*tls.Certificate, error) {
+// getServerCertificate returns a valid server TLS certificate and the intermediate CA certificates,
+// signed by the current CA root.
+func (s *Server) getServerCertificate() (*tls.Certificate, error) {
 	opts := util.CertOptions{
 		RSAKeySize: 2048,
 	}
 
+	bundle := s.ca.GetCAKeyCertBundle()
+	if bundle != nil {
+		// cert bundles can have errors (e.g. missing SAN)
+		// that do not matter for getting the encryption type
+		_, privKey, _, _ := bundle.GetAll()
+		if util.IsSupportedECPrivateKey(privKey) {
+			opts = util.CertOptions{
+				ECSigAlg: util.EcdsaSigAlg,
+			}
+		}
+	}
+
+	// TODO the user can specify algorithm to generate for CSRs independent of CA certificate
 	csrPEM, privPEM, err := util.GenCSR(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	certPEM, signErr := s.ca.Sign(csrPEM, s.hostnames, s.serverCertTTL, false)
+	certPEM, signErr := s.ca.SignWithCertChain(csrPEM, s.hostnames, s.serverCertTTL, false)
 	if signErr != nil {
-		return nil, signErr.(*ca.Error)
+		return nil, signErr.(*caerror.Error)
 	}
 
 	cert, err := tls.X509KeyPair(certPEM, privPEM)
@@ -268,20 +330,22 @@ func (s *Server) applyServerCertificate() (*tls.Certificate, error) {
 	return &cert, nil
 }
 
+// authenticate goes through a list of authenticators (provided client cert, k8s jwt, and ID token)
+// and authenticates if one of them is valid.
 func (s *Server) authenticate(ctx context.Context) *authenticate.Caller {
 	// TODO: apply different authenticators in specific order / according to configuration.
 	var errMsg string
-	for id, authn := range s.authenticators {
+	for id, authn := range s.Authenticators {
 		u, err := authn.Authenticate(ctx)
 		if err != nil {
-			errMsg += fmt.Sprintf("Authenticator#%d error: %v. ", id, err)
+			errMsg += fmt.Sprintf("Authenticator %s at index %d got error: %v. ", authn.AuthenticatorType(), id, err)
 		}
 		if u != nil && err == nil {
-			log.Debugf("Authentication successful through auth source %v", u.AuthSource)
+			serverCaLog.Debugf("Authentication successful through auth source %v", u.AuthSource)
 			return u
 		}
 	}
-	log.Warnf("Authentication failed: %s", errMsg)
+	serverCaLog.Warnf("Authentication failed for %v: %s", getConnectionAddress(ctx), errMsg)
 	return nil
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import (
 	"context"
 	"time"
 
-	"istio.io/istio/pkg/log"
+	"istio.io/pkg/log"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 func Backoff(baseDelay, maxDelay time.Duration, retries int) time.Duration {
 	backoff, max := float64(baseDelay), float64(maxDelay)
 	for backoff < max && retries > 0 {
-		backoff = backoff * backoffFactor
+		backoff *= backoffFactor
 		retries--
 	}
 	if backoff > max {

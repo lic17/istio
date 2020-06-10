@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package ca
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"io/ioutil"
@@ -28,6 +29,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"istio.io/istio/security/pkg/k8s/configmap"
+	k8ssecret "istio.io/istio/security/pkg/k8s/secret"
+	caerror "istio.io/istio/security/pkg/pki/error"
 	"istio.io/istio/security/pkg/pki/util"
 )
 
@@ -89,20 +92,23 @@ func TestCreateSelfSignedIstioCAWithoutSecret(t *testing.T) {
 	caCertTTL := time.Hour
 	defaultCertTTL := 30 * time.Minute
 	maxCertTTL := time.Hour
-	org := "test.ca.org"
-	dualUse := false
-	caNamespace := "default"
+	org := "test.ca.Org"
+	const caNamespace = "default"
 	client := fake.NewSimpleClientset()
+	rootCertFile := ""
+	rootCertCheckInverval := time.Hour
 
-	caopts, err := NewSelfSignedIstioCAOptions(context.Background(), caCertTTL, defaultCertTTL, maxCertTTL,
-		org, dualUse, caNamespace, -1, client.CoreV1())
+	caopts, err := NewSelfSignedIstioCAOptions(context.Background(),
+		0, caCertTTL, rootCertCheckInverval, defaultCertTTL,
+		maxCertTTL, org, false, caNamespace, -1, client.CoreV1(),
+		rootCertFile, false)
 	if err != nil {
 		t.Fatalf("Failed to create a self-signed CA Options: %v", err)
 	}
 
 	ca, err := NewIstioCA(caopts)
 	if err != nil {
-		t.Errorf("Got error while createing self-signed CA: %v", err)
+		t.Errorf("Got error while creating self-signed CA: %v", err)
 	}
 	if ca == nil {
 		t.Fatalf("Failed to create a self-signed CA.")
@@ -131,7 +137,7 @@ func TestCreateSelfSignedIstioCAWithoutSecret(t *testing.T) {
 	}
 
 	// Check the signing cert stored in K8s secret.
-	caSecret, err := client.CoreV1().Secrets("default").Get(CASecret, metav1.GetOptions{})
+	caSecret, err := client.CoreV1().Secrets("default").Get(context.TODO(), CASecret, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Failed to get secret (error: %s)", err)
 	}
@@ -168,28 +174,32 @@ func TestCreateSelfSignedIstioCAWithSecret(t *testing.T) {
 	signingKeyPem := []byte(key1Pem)
 
 	client := fake.NewSimpleClientset()
-	initSecret := BuildSecret("", CASecret, "default", nil, nil, nil, signingCertPem, signingKeyPem, istioCASecretType)
-	_, err := client.CoreV1().Secrets("default").Create(initSecret)
+	initSecret := k8ssecret.BuildSecret("", CASecret, "default",
+		nil, nil, nil, signingCertPem, signingKeyPem, istioCASecretType)
+	_, err := client.CoreV1().Secrets("default").Create(context.TODO(), initSecret, metav1.CreateOptions{})
 	if err != nil {
 		t.Errorf("Failed to create secret (error: %s)", err)
 	}
 
 	caCertTTL := time.Hour
-	certTTL := 30 * time.Minute
+	defaultCertTTL := 30 * time.Minute
 	maxCertTTL := time.Hour
-	org := "test.ca.org"
+	org := "test.ca.Org"
 	caNamespace := "default"
-	dualUse := false
+	const rootCertFile = ""
+	rootCertCheckInverval := time.Hour
 
-	caopts, err := NewSelfSignedIstioCAOptions(context.Background(), caCertTTL, certTTL, maxCertTTL,
-		org, dualUse, caNamespace, -1, client.CoreV1())
+	caopts, err := NewSelfSignedIstioCAOptions(context.Background(),
+		0, caCertTTL, rootCertCheckInverval, defaultCertTTL, maxCertTTL,
+		org, false, caNamespace, -1, client.CoreV1(),
+		rootCertFile, false)
 	if err != nil {
 		t.Fatalf("Failed to create a self-signed CA Options: %v", err)
 	}
 
 	ca, err := NewIstioCA(caopts)
 	if err != nil {
-		t.Errorf("Got error while createing self-signed CA: %v", err)
+		t.Errorf("Got error while creating self-signed CA: %v", err)
 	}
 	if ca == nil {
 		t.Fatalf("Failed to create a self-signed CA.")
@@ -237,11 +247,12 @@ func TestCreateSelfSignedIstioCAReadSigningCertOnly(t *testing.T) {
 	signingKeyPem := []byte(key1Pem)
 
 	caCertTTL := time.Hour
-	certTTL := 30 * time.Minute
+	defaultCertTTL := 30 * time.Minute
 	maxCertTTL := time.Hour
-	org := "test.ca.org"
+	org := "test.ca.Org"
 	caNamespace := "default"
-	dualUse := false
+	const rootCertFile = ""
+	rootCertCheckInverval := time.Hour
 
 	client := fake.NewSimpleClientset()
 
@@ -249,34 +260,35 @@ func TestCreateSelfSignedIstioCAReadSigningCertOnly(t *testing.T) {
 	expectedErr := "secret waiting thread is terminated"
 	ctx0, cancel0 := context.WithTimeout(context.Background(), time.Millisecond*50)
 	defer cancel0()
-	_, err := NewSelfSignedIstioCAOptions(ctx0, caCertTTL, certTTL, maxCertTTL,
-		org, dualUse, caNamespace, time.Millisecond*10, client.CoreV1())
+	_, err := NewSelfSignedIstioCAOptions(ctx0, 0,
+		caCertTTL, defaultCertTTL, rootCertCheckInverval, maxCertTTL, org, false,
+		caNamespace, time.Millisecond*10, client.CoreV1(), rootCertFile, false)
 	if err == nil {
 		t.Errorf("Expected error, but succeeded.")
-	}
-	if err.Error() != expectedErr {
+	} else if err.Error() != expectedErr {
 		t.Errorf("Unexpected error message: %s VS (expected) %s", err.Error(), expectedErr)
 		return
 	}
 
 	// Should succeed once secret is ready.
-	secret := BuildSecret("", CASecret, "default", nil, nil, nil, signingCertPem, signingKeyPem, istioCASecretType)
-	_, err = client.CoreV1().Secrets("default").Create(secret)
+	secret := k8ssecret.BuildSecret("", CASecret, "default", nil, nil, nil, signingCertPem, signingKeyPem, istioCASecretType)
+	_, err = client.CoreV1().Secrets("default").Create(context.TODO(), secret, metav1.CreateOptions{})
 	if err != nil {
 		t.Errorf("Failed to create secret (error: %s)", err)
 	}
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
-	caopts, err := NewSelfSignedIstioCAOptions(ctx1, caCertTTL, certTTL, maxCertTTL,
-		org, dualUse, caNamespace, time.Millisecond*10, client.CoreV1())
+	caopts, err := NewSelfSignedIstioCAOptions(ctx1, 0,
+		caCertTTL, defaultCertTTL, rootCertCheckInverval, maxCertTTL, org, false,
+		caNamespace, time.Millisecond*10, client.CoreV1(), rootCertFile, false)
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
 	ca, err := NewIstioCA(caopts)
 	if err != nil {
-		t.Errorf("Got error while createing self-signed CA: %v", err)
+		t.Errorf("Got error while creating self-signed CA: %v", err)
 	}
 	if ca == nil {
 		t.Fatalf("Failed to create a self-signed CA.")
@@ -322,7 +334,7 @@ func TestCreatePluggedCertCA(t *testing.T) {
 
 	ca, err := NewIstioCA(caopts)
 	if err != nil {
-		t.Errorf("Got error while createing plugged-cert CA: %v", err)
+		t.Errorf("Got error while creating plugged-cert CA: %v", err)
 	}
 	if ca == nil {
 		t.Fatalf("Failed to create a plugged-cert CA.")
@@ -348,7 +360,7 @@ func TestCreatePluggedCertCA(t *testing.T) {
 	if err != nil {
 		t.Errorf("Cannot get the CA cert from configmap (%v)", err)
 	}
-	_, _, _, cert := ca.GetCAKeyCertBundle().GetAllPem()
+	_, _, cert, _ := ca.GetCAKeyCertBundle().GetAllPem()
 	certFromConfigMap, err := base64.StdEncoding.DecodeString(strCertFromConfigMap)
 	if err != nil {
 		t.Errorf("Cannot decode the CA cert from configmap (%v)", err)
@@ -361,145 +373,335 @@ func TestCreatePluggedCertCA(t *testing.T) {
 // TODO: merge tests for SignCSR.
 func TestSignCSRForWorkload(t *testing.T) {
 	subjectID := "spiffe://example.com/ns/foo/sa/bar"
+	cases := map[string]struct {
+		certOpts util.CertOptions
+	}{
+		"Workload uses RSA": {
+			certOpts: util.CertOptions{
+				// This value is not used, instead, subjectID should be used in certificate.
+				Host:       "spiffe://different.com/test",
+				RSAKeySize: 2048,
+				IsCA:       false,
+			},
+		},
+		"Workload uses EC": {
+			certOpts: util.CertOptions{
+				// This value is not used, instead, subjectID should be used in certificate.
+				Host:     "spiffe://different.com/test",
+				ECSigAlg: util.EcdsaSigAlg,
+				IsCA:     false,
+			},
+		},
+	}
+
+	for id, tc := range cases {
+		csrPEM, keyPEM, err := util.GenCSR(tc.certOpts)
+		if err != nil {
+			t.Errorf("%s: GenCSR error: %v", id, err)
+		}
+
+		ca, err := createCA(time.Hour, tc.certOpts.ECSigAlg)
+		if err != nil {
+			t.Errorf("%s: createCA error: %v", id, err)
+		}
+
+		requestedTTL := 30 * time.Minute
+		certPEM, signErr := ca.Sign(csrPEM, []string{subjectID}, requestedTTL, false)
+		if signErr != nil {
+			t.Errorf("%s: Sign error: %v", id, err)
+		}
+
+		fields := &util.VerifyFields{
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+			KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+			IsCA:        false,
+			Host:        subjectID,
+		}
+		_, _, certChainBytes, rootCertBytes := ca.GetCAKeyCertBundle().GetAll()
+		if err = util.VerifyCertificate(
+			keyPEM, append(certPEM, certChainBytes...), rootCertBytes, fields); err != nil {
+			t.Errorf("%s: VerifyCertificate error: %v", id, err)
+		}
+
+		cert, err := util.ParsePemEncodedCertificate(certPEM)
+		if err != nil {
+			t.Errorf("%s: ParsePemEncodedCertificate error: %v", id, err)
+		}
+
+		if ttl := cert.NotAfter.Sub(cert.NotBefore); ttl != requestedTTL {
+			t.Errorf("%s: Unexpected certificate TTL (expecting %v, actual %v)", id, requestedTTL, ttl)
+		}
+		san := util.ExtractSANExtension(cert.Extensions)
+		if san == nil {
+			t.Errorf("%s: No SAN extension is found in the certificate", id)
+		}
+		expected, err := util.BuildSubjectAltNameExtension(subjectID)
+		if err != nil {
+			t.Errorf("%s: BuildSubjectAltNameExtension error: %v", id, err)
+		}
+		if !reflect.DeepEqual(expected, san) {
+			t.Errorf("%s: Unexpected extensions: wanted %v but got %v", id, expected, san)
+		}
+	}
+}
+
+func TestSignCSRForCA(t *testing.T) {
+	subjectID := "spiffe://example.com/ns/foo/sa/baz"
+	cases := map[string]struct {
+		RSAKeySize int
+		IsCA       bool
+		ECSigAlg   util.SupportedECSignatureAlgorithms
+	}{
+		"CA uses RSA": {
+			RSAKeySize: 2048,
+			IsCA:       true,
+		},
+		"CA uses EC": {
+			ECSigAlg: util.EcdsaSigAlg,
+			IsCA:     true,
+		},
+	}
+
+	for id, tc := range cases {
+		certOpts := util.CertOptions{
+			RSAKeySize: tc.RSAKeySize,
+			IsCA:       tc.IsCA,
+			ECSigAlg:   tc.ECSigAlg,
+		}
+		csrPEM, keyPEM, err := util.GenCSR(certOpts)
+		if err != nil {
+			t.Errorf("%s: GenCSR error: %v", id, err)
+		}
+
+		ca, err := createCA(365*24*time.Hour, tc.ECSigAlg)
+		if err != nil {
+			t.Errorf("%s: createCA error: %v", id, err)
+		}
+
+		requestedTTL := 30 * 24 * time.Hour
+		certPEM, signErr := ca.Sign(csrPEM, []string{subjectID}, requestedTTL, true)
+		if signErr != nil {
+			t.Errorf("%s: Sign error: %v", id, err)
+		}
+
+		fields := &util.VerifyFields{
+			KeyUsage: x509.KeyUsageCertSign,
+			IsCA:     true,
+			Host:     subjectID,
+		}
+		_, _, certChainBytes, rootCertBytes := ca.GetCAKeyCertBundle().GetAll()
+		if err = util.VerifyCertificate(
+			keyPEM, append(certPEM, certChainBytes...), rootCertBytes, fields); err != nil {
+			t.Errorf("%s: VerifyCertificate error: %v", id, err)
+		}
+
+		cert, err := util.ParsePemEncodedCertificate(certPEM)
+		if err != nil {
+			t.Errorf("%s: ParsePemEncodedCertificate error: %v", id, err)
+		}
+
+		if ttl := cert.NotAfter.Sub(cert.NotBefore); ttl != requestedTTL {
+			t.Errorf("Unexpected certificate TTL (expecting %v, actual %v)", requestedTTL, ttl)
+		}
+		san := util.ExtractSANExtension(cert.Extensions)
+		if san == nil {
+			t.Errorf("%s: No SAN extension is found in the certificate", id)
+		}
+		expected, err := util.BuildSubjectAltNameExtension(subjectID)
+		if err != nil {
+			t.Error(err)
+		}
+		if !reflect.DeepEqual(expected, san) {
+			t.Errorf("%s: Unexpected extensions: wanted %v but got %v", id, expected, san)
+		}
+	}
+}
+
+func TestSignCSRTTLError(t *testing.T) {
+	subjectID := "spiffe://example.com/ns/foo/sa/bar"
+	cases := map[string]struct {
+		Org        string
+		RSAKeySize int
+		ECSigAlg   util.SupportedECSignatureAlgorithms
+	}{
+		"CSR uses RSA": {
+			Org:        "istio.io",
+			RSAKeySize: 2048,
+		},
+		"CSR uses EC": {
+			Org:      "istio.io",
+			ECSigAlg: util.EcdsaSigAlg,
+		},
+	}
+
+	for id, tc := range cases {
+		certOpts := util.CertOptions{
+			Org:        tc.Org,
+			RSAKeySize: tc.RSAKeySize,
+			ECSigAlg:   tc.ECSigAlg,
+		}
+		csrPEM, _, err := util.GenCSR(certOpts)
+		if err != nil {
+			t.Errorf("%s: GenCSR error: %v", id, err)
+		}
+
+		ca, err := createCA(2*time.Hour, tc.ECSigAlg)
+		if err != nil {
+			t.Errorf("%s: createCA error: %v", id, err)
+		}
+
+		ttl := 3 * time.Hour
+
+		cert, signErr := ca.Sign(csrPEM, []string{subjectID}, ttl, false)
+		if cert != nil {
+			t.Errorf("%s: Expected null cert be obtained a non-null cert.", id)
+		}
+		expectedErr := "requested TTL 3h0m0s is greater than the max allowed TTL 2h0m0s"
+		if signErr.(*caerror.Error).Error() != expectedErr {
+			t.Errorf("%s: Expected error: %s but got error: %s.", id, signErr.(*caerror.Error).Error(), expectedErr)
+		}
+	}
+}
+
+func TestAppendRootCerts(t *testing.T) {
+	root1 := "root-cert-1"
+	expRootCerts := `root-cert-1
+root-cert-2
+root-cert-3`
+	rootCerts, err := util.AppendRootCerts([]byte(root1), "./root-certs-for-testing.pem")
+	if err != nil {
+		t.Errorf("AppendRootCerts() returns an error: %v", err)
+	} else if expRootCerts != string(rootCerts) {
+		t.Errorf("the root certificates do not match. Expect:%v. Actual:%v.",
+			expRootCerts, string(rootCerts))
+	}
+}
+
+func TestAppendRootCertsToNullCert(t *testing.T) {
+	// nil certificate
+	var root1 []byte
+	expRootCerts := `root-cert-2
+root-cert-3`
+	rootCerts, err := util.AppendRootCerts(root1, "./root-certs-for-testing.pem")
+	if err != nil {
+		t.Errorf("AppendRootCerts() returns an error: %v", err)
+	} else if expRootCerts != string(rootCerts) {
+		t.Errorf("the root certificates do not match. Expect:%v. Actual:%v.",
+			expRootCerts, string(rootCerts))
+	}
+}
+
+func TestSignWithCertChain(t *testing.T) {
+	rootCertFile := "../testdata/multilevelpki/root-cert.pem"
+	certChainFile := "../testdata/multilevelpki/int-cert-chain.pem"
+	signingCertFile := "../testdata/multilevelpki/int-cert.pem"
+	signingKeyFile := "../testdata/multilevelpki/int-key.pem"
+	caNamespace := "default"
+
+	defaultWorkloadCertTTL := 30 * time.Minute
+	maxWorkloadCertTTL := time.Hour
+
+	client := fake.NewSimpleClientset()
+
+	caopts, err := NewPluggedCertIstioCAOptions(certChainFile, signingCertFile, signingKeyFile, rootCertFile,
+		defaultWorkloadCertTTL, maxWorkloadCertTTL, caNamespace, client.CoreV1())
+	if err != nil {
+		t.Fatalf("Failed to create a plugged-cert CA Options: %v", err)
+	}
+
+	ca, err := NewIstioCA(caopts)
+	if err != nil {
+		t.Errorf("Got error while creating plugged-cert CA: %v", err)
+	}
+	if ca == nil {
+		t.Fatalf("Failed to create a plugged-cert CA.")
+	}
+
 	opts := util.CertOptions{
 		// This value is not used, instead, subjectID should be used in certificate.
 		Host:       "spiffe://different.com/test",
 		RSAKeySize: 2048,
 		IsCA:       false,
 	}
-	csrPEM, keyPEM, err := util.GenCSR(opts)
+	csrPEM, privPEM, err := util.GenCSR(opts)
 	if err != nil {
 		t.Error(err)
 	}
 
-	ca, err := createCA(time.Hour, false)
-	if err != nil {
-		t.Error(err)
-	}
-
-	requestedTTL := 30 * time.Minute
-	certPEM, signErr := ca.Sign(csrPEM, []string{subjectID}, requestedTTL, false)
+	certPEM, signErr := ca.SignWithCertChain(csrPEM, []string{"localhost"}, time.Hour, false)
 	if signErr != nil {
 		t.Error(err)
 	}
 
-	fields := &util.VerifyFields{
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		IsCA:        false,
-		Host:        subjectID,
-	}
-	_, _, certChainBytes, rootCertBytes := ca.GetCAKeyCertBundle().GetAll()
-	if err = util.VerifyCertificate(
-		keyPEM, append(certPEM, certChainBytes...), rootCertBytes, fields); err != nil {
-		t.Error(err)
-	}
-
-	cert, err := util.ParsePemEncodedCertificate(certPEM)
+	cert, err := tls.X509KeyPair(certPEM, privPEM)
 	if err != nil {
 		t.Error(err)
 	}
 
-	if ttl := cert.NotAfter.Sub(cert.NotBefore); ttl != requestedTTL {
-		t.Errorf("Unexpected certificate TTL (expecting %v, actual %v)", requestedTTL, ttl)
-	}
-	san := util.ExtractSANExtension(cert.Extensions)
-	if san == nil {
-		t.Errorf("No SAN extension is found in the certificate")
-	}
-	expected, err := util.BuildSubjectAltNameExtension(subjectID)
-	if err != nil {
-		t.Error(err)
-	}
-	if !reflect.DeepEqual(expected, san) {
-		t.Errorf("Unexpected extensions: wanted %v but got %v", expected, san)
+	if len(cert.Certificate) != 3 {
+		t.Errorf("Unexpected number of certificates returned: %d (expected 4)", len(cert.Certificate))
 	}
 }
 
-func TestSignCSRForCA(t *testing.T) {
-	subjectID := "spiffe://example.com/ns/foo/sa/baz"
-	opts := util.CertOptions{
-		RSAKeySize: 2048,
-		IsCA:       true,
+func TestGenKeyCert(t *testing.T) {
+	cases := map[string]struct {
+		rootCertFile    string
+		certChainFile   string
+		signingCertFile string
+		signingKeyFile  string
+	}{
+		"RSA cryptography": {
+			rootCertFile:    "../testdata/multilevelpki/root-cert.pem",
+			certChainFile:   "../testdata/multilevelpki/int-cert-chain.pem",
+			signingCertFile: "../testdata/multilevelpki/int-cert.pem",
+			signingKeyFile:  "../testdata/multilevelpki/int-key.pem",
+		},
+		"EC cryptography": {
+			rootCertFile:    "../testdata/multilevelpki/ecc-root-cert.pem",
+			certChainFile:   "../testdata/multilevelpki/ecc-int-cert-chain.pem",
+			signingCertFile: "../testdata/multilevelpki/ecc-int-cert.pem",
+			signingKeyFile:  "../testdata/multilevelpki/ecc-int-key.pem",
+		},
 	}
-	csrPEM, keyPEM, err := util.GenCSR(opts)
-	if err != nil {
-		t.Error(err)
-	}
+	caNamespace := "default"
 
-	ca, err := createCA(365*24*time.Hour, true)
-	if err != nil {
-		t.Error(err)
-	}
+	defaultWorkloadCertTTL := 30 * time.Minute
+	maxWorkloadCertTTL := 3650 * 24 * time.Hour
 
-	requestedTTL := 30 * 24 * time.Hour
-	certPEM, signErr := ca.Sign(csrPEM, []string{subjectID}, requestedTTL, true)
-	if signErr != nil {
-		t.Error(err)
-	}
+	for id, tc := range cases {
+		client := fake.NewSimpleClientset()
 
-	fields := &util.VerifyFields{
-		KeyUsage: x509.KeyUsageCertSign,
-		IsCA:     true,
-		Host:     subjectID,
-	}
-	_, _, certChainBytes, rootCertBytes := ca.GetCAKeyCertBundle().GetAll()
-	if err = util.VerifyCertificate(
-		keyPEM, append(certPEM, certChainBytes...), rootCertBytes, fields); err != nil {
-		t.Error(err)
-	}
+		caopts, err := NewPluggedCertIstioCAOptions(tc.certChainFile, tc.signingCertFile, tc.signingKeyFile, tc.rootCertFile,
+			defaultWorkloadCertTTL, maxWorkloadCertTTL, caNamespace, client.CoreV1())
+		if err != nil {
+			t.Fatalf("%s: failed to create a plugged-cert CA Options: %v", id, err)
+		}
 
-	cert, err := util.ParsePemEncodedCertificate(certPEM)
-	if err != nil {
-		t.Error(err)
-	}
+		ca, err := NewIstioCA(caopts)
+		if err != nil {
+			t.Errorf("%s: got error while creating plugged-cert CA: %v", id, err)
+		}
+		if ca == nil {
+			t.Fatalf("failed to create a plugged-cert CA.")
+		}
 
-	if ttl := cert.NotAfter.Sub(cert.NotBefore); ttl != requestedTTL {
-		t.Errorf("Unexpected certificate TTL (expecting %v, actual %v)", requestedTTL, ttl)
-	}
-	san := util.ExtractSANExtension(cert.Extensions)
-	if san == nil {
-		t.Errorf("No SAN extension is found in the certificate")
-	}
-	expected, err := util.BuildSubjectAltNameExtension(subjectID)
-	if err != nil {
-		t.Error(err)
-	}
-	if !reflect.DeepEqual(expected, san) {
-		t.Errorf("Unexpected extensions: wanted %v but got %v", expected, san)
+		certPEM, privPEM, err := ca.GenKeyCert([]string{"host1", "host2"}, 3650*24*time.Hour)
+		if err != nil {
+			t.Errorf("%s: GenKeyCert error: %v", id, err)
+		}
+
+		cert, err := tls.X509KeyPair(certPEM, privPEM)
+		if err != nil {
+			t.Errorf("%s: X509KeyPair error: %v", id, err)
+		}
+
+		if len(cert.Certificate) != 3 {
+			t.Errorf("%s: unexpected number of certificates returned: %d (expected 3)", id, len(cert.Certificate))
+		}
 	}
 }
 
-func TestSignCSRTTLError(t *testing.T) {
-	subjectID := "spiffe://example.com/ns/foo/sa/bar"
-	opts := util.CertOptions{
-		Org:        "istio.io",
-		RSAKeySize: 2048,
-	}
-	csrPEM, _, err := util.GenCSR(opts)
-	if err != nil {
-		t.Error(err)
-	}
-
-	ca, err := createCA(2*time.Hour, false)
-	if err != nil {
-		t.Error(err)
-	}
-
-	ttl := 3 * time.Hour
-
-	cert, signErr := ca.Sign(csrPEM, []string{subjectID}, ttl, false)
-	if cert != nil {
-		t.Errorf("Expected null cert be obtained a non-null cert.")
-	}
-	expectedErr := "requested TTL 3h0m0s is greater than the max allowed TTL 2h0m0s"
-	if signErr.(*Error).Error() != expectedErr {
-		t.Errorf("Expected error: %s but got error: %s.", signErr.(*Error).Error(), expectedErr)
-	}
-}
-
-// nolint: unparam
-func createCA(maxTTL time.Duration, multicluster bool) (*IstioCA, error) {
+func createCA(maxTTL time.Duration, ecSigAlg util.SupportedECSignatureAlgorithms) (*IstioCA, error) {
 	// Generate root CA key and cert.
 	rootCAOpts := util.CertOptions{
 		IsCA:         true,
@@ -507,7 +709,9 @@ func createCA(maxTTL time.Duration, multicluster bool) (*IstioCA, error) {
 		TTL:          time.Hour,
 		Org:          "Root CA",
 		RSAKeySize:   2048,
+		ECSigAlg:     ecSigAlg,
 	}
+
 	rootCertBytes, rootKeyBytes, err := util.GenCertKeyFromOptions(rootCAOpts)
 	if err != nil {
 		return nil, err
@@ -531,7 +735,9 @@ func createCA(maxTTL time.Duration, multicluster bool) (*IstioCA, error) {
 		RSAKeySize:   2048,
 		SignerCert:   rootCert,
 		SignerPriv:   rootKey,
+		ECSigAlg:     ecSigAlg,
 	}
+
 	intermediateCert, intermediateKey, err := util.GenCertKeyFromOptions(intermediateCAOpts)
 	if err != nil {
 		return nil, err
@@ -542,10 +748,15 @@ func createCA(maxTTL time.Duration, multicluster bool) (*IstioCA, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Disable root cert rotator by setting root cert check interval to 0ns.
+	rootCertCheckInverval := time.Duration(0)
 	caOpts := &IstioCAOptions{
-		CertTTL:       time.Hour,
-		MaxCertTTL:    maxTTL,
-		KeyCertBundle: bundle,
+		DefaultCertTTL: time.Hour,
+		MaxCertTTL:     maxTTL,
+		KeyCertBundle:  bundle,
+		RotatorConfig: &SelfSignedCARootCertRotatorConfig{
+			CheckInterval: rootCertCheckInverval,
+		},
 	}
 
 	return NewIstioCA(caOpts)

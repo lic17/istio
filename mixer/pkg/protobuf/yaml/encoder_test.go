@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors.
+// Copyright Istio Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // nolint
-//go:generate $GOPATH/src/istio.io/istio/bin/protoc.sh testdata/all/types.proto  --include_imports  -otestdata/all/types.descriptor -I$GOPATH/src/istio.io/istio/vendor/istio.io/api -I.
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh  -d false -f mixer/pkg/protobuf/yaml/testdata/all/types.proto
+//go:generate $REPO_ROOT/bin/protoc.sh testdata/all/types.proto  --include_imports  -otestdata/all/types.descriptor -I.
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh  -d false -f mixer/pkg/protobuf/yaml/testdata/all/types.proto
 
 package yaml
 

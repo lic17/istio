@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,8 +15,10 @@
 package memory
 
 import (
+	"istio.io/pkg/log"
+
 	"istio.io/istio/pilot/pkg/model"
-	"istio.io/istio/pkg/log"
+	"istio.io/istio/pkg/config/schema/resource"
 )
 
 const (
@@ -25,24 +27,25 @@ const (
 )
 
 // Handler specifies a function to apply on a Config for a given event type
-type Handler func(model.Config, model.Event)
+type Handler func(model.Config, model.Config, model.Event)
 
 // Monitor provides methods of manipulating changes in the config store
 type Monitor interface {
 	Run(<-chan struct{})
-	AppendEventHandler(string, Handler)
+	AppendEventHandler(resource.GroupVersionKind, Handler)
 	ScheduleProcessEvent(ConfigEvent)
 }
 
 // ConfigEvent defines the event to be processed
 type ConfigEvent struct {
 	config model.Config
+	old    model.Config
 	event  model.Event
 }
 
 type configstoreMonitor struct {
 	store    model.ConfigStore
-	handlers map[string][]Handler
+	handlers map[resource.GroupVersionKind][]Handler
 	eventCh  chan ConfigEvent
 }
 
@@ -53,10 +56,10 @@ func NewMonitor(store model.ConfigStore) Monitor {
 
 // NewBufferedMonitor returns new Monitor implementation with the specified event buffer size
 func NewBufferedMonitor(store model.ConfigStore, bufferSize int) Monitor {
-	handlers := make(map[string][]Handler)
+	handlers := make(map[resource.GroupVersionKind][]Handler)
 
-	for _, typ := range store.ConfigDescriptor().Types() {
-		handlers[typ] = make([]Handler, 0)
+	for _, s := range store.Schemas().All() {
+		handlers[s.Resource().GroupVersionKind()] = make([]Handler, 0)
 	}
 
 	return &configstoreMonitor{
@@ -74,9 +77,6 @@ func (m *configstoreMonitor) Run(stop <-chan struct{}) {
 	for {
 		select {
 		case <-stop:
-			if _, ok := <-m.eventCh; ok {
-				close(m.eventCh)
-			}
 			return
 		case ce, ok := <-m.eventCh:
 			if ok {
@@ -87,19 +87,19 @@ func (m *configstoreMonitor) Run(stop <-chan struct{}) {
 }
 
 func (m *configstoreMonitor) processConfigEvent(ce ConfigEvent) {
-	if _, exists := m.handlers[ce.config.Type]; !exists {
+	if _, exists := m.handlers[ce.config.GroupVersionKind()]; !exists {
 		log.Warnf("Config Type %s does not exist in config store", ce.config.Type)
 		return
 	}
-	m.applyHandlers(ce.config, ce.event)
+	m.applyHandlers(ce.old, ce.config, ce.event)
 }
 
-func (m *configstoreMonitor) AppendEventHandler(typ string, h Handler) {
+func (m *configstoreMonitor) AppendEventHandler(typ resource.GroupVersionKind, h Handler) {
 	m.handlers[typ] = append(m.handlers[typ], h)
 }
 
-func (m *configstoreMonitor) applyHandlers(config model.Config, e model.Event) {
-	for _, f := range m.handlers[config.Type] {
-		f(config, e)
+func (m *configstoreMonitor) applyHandlers(old model.Config, config model.Config, e model.Event) {
+	for _, f := range m.handlers[config.GroupVersionKind()] {
+		f(old, config, e)
 	}
 }

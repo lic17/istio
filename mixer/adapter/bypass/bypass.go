@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // nolint: lll
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -a mixer/adapter/bypass/config/config.proto -x "-n bypass -t checknothing -t reportnothing -t metric -t quota"
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -a mixer/adapter/bypass/config/config.proto -x "-n bypass -t checknothing -t reportnothing -t metric -t quota"
 
 package bypass
 
@@ -24,12 +24,13 @@ import (
 	"github.com/cenkalti/backoff"
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/types"
-	"go.uber.org/multierr"
+	"github.com/hashicorp/go-multierror"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 
 	"istio.io/api/mixer/adapter/model/v1beta1"
 	"istio.io/istio/mixer/adapter/bypass/config"
+	"istio.io/istio/mixer/adapter/metadata"
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/template/checknothing"
 	"istio.io/istio/mixer/template/metric"
@@ -39,19 +40,9 @@ import (
 
 // GetInfo returns the Info associated with this adapter implementation.
 func GetInfo() adapter.Info {
-	return adapter.Info{
-		Name:        "bypass",
-		Impl:        "istio.io/istio/mixer/adapter/bypass",
-		Description: "Calls gRPC backends via the inline adapter model (useful for testing)",
-		SupportedTemplates: []string{
-			checknothing.TemplateName,
-			reportnothing.TemplateName,
-			metric.TemplateName,
-			quota.TemplateName,
-		},
-		DefaultConfig: &config.Params{},
-		NewBuilder:    func() adapter.HandlerBuilder { return &builder{} },
-	}
+	info := metadata.GetInfo("bypass")
+	info.NewBuilder = func() adapter.HandlerBuilder { return &builder{} }
+	return info
 }
 
 type builder struct {
@@ -99,7 +90,7 @@ func (b *builder) Validate() (ce *adapter.ConfigErrors) {
 
 	anyTypes, err := b.getInferredTypes()
 	if err != nil {
-		ce = ce.Appendf("infrerred_types", "Error marshalling to any: %v", err)
+		ce = ce.Appendf("infrerred_types", "Error marshaling to any: %v", err)
 		return
 	}
 
@@ -164,7 +155,7 @@ func (b *builder) ensureConn() error {
 	if b.conn == nil {
 		bo := backoff.NewExponentialBackOff()
 		bo.InitialInterval = time.Millisecond * 10
-		bo.MaxElapsedTime = time.Minute
+		bo.MaxElapsedTime = time.Minute * 5
 
 		err := backoff.Retry(func() error {
 			var e error
@@ -354,8 +345,7 @@ func (h *handler) Close() (err error) {
 	}
 
 	if h.conn != nil {
-		err2 := h.conn.Close()
-		err = multierr.Append(err, err2)
+		err = multierror.Append(err, h.conn.Close()).ErrorOrNil()
 	}
 
 	return

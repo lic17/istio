@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,36 +17,51 @@ package helper
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"os"
 	"reflect"
 	"testing"
 
 	gapiopts "google.golang.org/api/option"
 
 	"istio.io/istio/mixer/adapter/stackdriver/config"
+	testenv "istio.io/istio/mixer/pkg/adapter/test"
 )
 
 func TestToOpts(t *testing.T) {
+	testSvcAcctFile, err := ioutil.TempFile("", "serviceAccount.json")
+	if err != nil {
+		t.Fatalf("cannot create a temp file for testing: %v", err)
+	}
+	svcAcctFilePath := testSvcAcctFile.Name()
+	defer os.Remove(svcAcctFilePath)
 	tests := []struct {
 		name string
 		cfg  *config.Params
 		out  []gapiopts.ClientOption // we only assert that the types match, so contents of the option don't matter
 	}{
 		{"empty", &config.Params{}, []gapiopts.ClientOption{}},
-		{"api key", &config.Params{Creds: &config.Params_ApiKey{}}, []gapiopts.ClientOption{gapiopts.WithAPIKey("")}},
+		{"api key", &config.Params{Creds: &config.Params_ApiKey{}}, []gapiopts.ClientOption{}},
 		{"app creds", &config.Params{Creds: &config.Params_AppCredentials{}}, []gapiopts.ClientOption{}},
 		{"service account",
+			&config.Params{Creds: &config.Params_ServiceAccountPath{ServiceAccountPath: svcAcctFilePath}},
+			[]gapiopts.ClientOption{gapiopts.WithCredentialsFile(svcAcctFilePath)}},
+		{"service account file not found",
+			&config.Params{Creds: &config.Params_ServiceAccountPath{ServiceAccountPath: "/some/non/existent/path"}},
+			[]gapiopts.ClientOption{}},
+		{"service account empty",
 			&config.Params{Creds: &config.Params_ServiceAccountPath{}},
-			[]gapiopts.ClientOption{gapiopts.WithCredentialsFile("")}},
+			[]gapiopts.ClientOption{}},
 		{"endpoint",
 			&config.Params{Endpoint: "foo.bar"},
 			[]gapiopts.ClientOption{gapiopts.WithEndpoint("")}},
 		{"endpoint + svc account",
 			&config.Params{Endpoint: "foo.bar", Creds: &config.Params_ServiceAccountPath{}},
-			[]gapiopts.ClientOption{gapiopts.WithEndpoint(""), gapiopts.WithCredentialsFile("")}},
+			[]gapiopts.ClientOption{gapiopts.WithEndpoint("")}},
 	}
 	for idx, tt := range tests {
 		t.Run(fmt.Sprintf("[%d] %s", idx, tt.name), func(t *testing.T) {
-			opts := ToOpts(tt.cfg)
+			opts := ToOpts(tt.cfg, testenv.NewEnv(t).Logger())
 			if len(opts) != len(tt.out) {
 				t.Errorf("len(toOpts(%v)) = %d, expected %d", tt.cfg, len(opts), len(tt.out))
 			}
@@ -77,6 +92,7 @@ func TestMetadata(t *testing.T) {
 		projectIDFn   metadataFn
 		locationFn    metadataFn
 		clusterNameFn metadataFn
+		meshIDFn      metadataFn
 		want          Metadata
 	}{
 		{
@@ -85,6 +101,7 @@ func TestMetadata(t *testing.T) {
 			func() (string, error) { return "pid", nil },
 			func() (string, error) { return "location", nil },
 			func() (string, error) { return "cluster", nil },
+			func() (string, error) { return "mesh-id", nil },
 			Metadata{ProjectID: "", Location: "", ClusterName: ""},
 		},
 		{
@@ -93,6 +110,7 @@ func TestMetadata(t *testing.T) {
 			func() (string, error) { return "pid", nil },
 			func() (string, error) { return "location", nil },
 			func() (string, error) { return "cluster", nil },
+			func() (string, error) { return "mesh-id", nil },
 			Metadata{ProjectID: "pid", Location: "location", ClusterName: "cluster"},
 		},
 		{
@@ -101,6 +119,7 @@ func TestMetadata(t *testing.T) {
 			func() (string, error) { return "", errors.New("error") },
 			func() (string, error) { return "location", nil },
 			func() (string, error) { return "cluster", nil },
+			func() (string, error) { return "mesh-id", nil },
 			Metadata{ProjectID: "", Location: "location", ClusterName: "cluster"},
 		},
 		{
@@ -109,6 +128,7 @@ func TestMetadata(t *testing.T) {
 			func() (string, error) { return "pid", nil },
 			func() (string, error) { return "location", errors.New("error") },
 			func() (string, error) { return "cluster", nil },
+			func() (string, error) { return "mesh-id", nil },
 			Metadata{ProjectID: "pid", Location: "", ClusterName: "cluster"},
 		},
 		{
@@ -117,6 +137,7 @@ func TestMetadata(t *testing.T) {
 			func() (string, error) { return "pid", nil },
 			func() (string, error) { return "location", nil },
 			func() (string, error) { return "cluster", errors.New("error") },
+			func() (string, error) { return "mesh-id", nil },
 			Metadata{ProjectID: "pid", Location: "location", ClusterName: ""},
 		},
 	}

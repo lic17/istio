@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 //
 //
 // nolint: lll
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -a mixer/adapter/redisquota/config/config.proto -x "-n redisquota -t quota"
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -a mixer/adapter/redisquota/config/config.proto -x "-n redisquota -t quota"
 package redisquota // import "istio.io/istio/mixer/adapter/redisquota"
 
 import (
@@ -31,6 +31,7 @@ import (
 
 	"github.com/go-redis/redis"
 
+	"istio.io/istio/mixer/adapter/metadata"
 	"istio.io/istio/mixer/adapter/redisquota/config"
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/status"
@@ -288,7 +289,7 @@ func getAllocatedTokenFromResult(result *interface{}) (int64, time.Duration, err
 // find override
 func (h *handler) getKeyAndQuotaAmount(instance *quota.Instance, quota *config.Params_Quota) (string, int64, error) {
 	maxAmount := quota.MaxAmount
-	key := quota.Name
+	key := makeKey(quota.Name, instance.Dimensions)
 
 	for idx := range quota.Overrides {
 		if matchDimensions(&quota.Overrides[idx].Dimensions, &instance.Dimensions) {
@@ -320,7 +321,9 @@ func (h *handler) HandleQuota(context context.Context, instance *quota.Instance,
 			key, maxAmount, err := h.getKeyAndQuotaAmount(instance, limit)
 			if err != nil {
 				_ = h.logger.Errorf("%v", err.Error())
-				return adapter.QuotaResult{}, nil
+				return adapter.QuotaResult{
+					Status: status.WithInternal("redisquota: Internal Error"),
+				}, nil
 			}
 
 			h.logger.Debugf("key: %v maxAmount: %v", key, maxAmount)
@@ -343,13 +346,17 @@ func (h *handler) HandleQuota(context context.Context, instance *quota.Instance,
 
 			if err != nil {
 				_ = h.logger.Errorf("failed to run quota script: %v", err)
-				return adapter.QuotaResult{}, nil
+				return adapter.QuotaResult{
+					Status: status.WithUnavailable("redisquota: Service Unavailable"),
+				}, nil
 			}
 
 			allocated, expiration, err := getAllocatedTokenFromResult(&result)
 			if err != nil {
 				_ = h.logger.Errorf("%v", err)
-				return adapter.QuotaResult{}, nil
+				return adapter.QuotaResult{
+					Status: status.WithInternal("redisquota: Internal Error"),
+				}, nil
 			}
 
 			if allocated <= 0 {
@@ -364,7 +371,9 @@ func (h *handler) HandleQuota(context context.Context, instance *quota.Instance,
 		}
 	}
 
-	return adapter.QuotaResult{}, nil
+	return adapter.QuotaResult{
+		Status: status.OK,
+	}, nil
 }
 
 func (h handler) Close() error {
@@ -375,19 +384,9 @@ func (h handler) Close() error {
 
 // GetInfo returns the Info associated with this adapter implementation.
 func GetInfo() adapter.Info {
-	return adapter.Info{
-		Name:        "redisquota",
-		Impl:        "istio.io/mixer/adapter/redisquota",
-		Description: "Redis-based quotas.",
-		SupportedTemplates: []string{
-			quota.TemplateName,
-		},
-		DefaultConfig: &config.Params{
-			RedisServerUrl:     "localhost:6379",
-			ConnectionPoolSize: 10,
-		},
-		NewBuilder: func() adapter.HandlerBuilder { return &builder{} },
-	}
+	info := metadata.GetInfo("redisquota")
+	info.NewBuilder = func() adapter.HandlerBuilder { return &builder{} }
+	return info
 }
 
 ///////////////////////////////////////////////////////

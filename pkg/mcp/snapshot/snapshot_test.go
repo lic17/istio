@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,6 +39,14 @@ type fakeSnapshot struct {
 
 func (fs *fakeSnapshot) Resources(collection string) []*mcp.Resource { return fs.resources[collection] }
 func (fs *fakeSnapshot) Version(collection string) string            { return fs.versions[collection] }
+func (fs *fakeSnapshot) Collections() []string {
+	result := make([]string, 0, len(fs.resources))
+	for collection := range fs.resources {
+		result = append(result, collection)
+	}
+
+	return result
+}
 
 func (fs *fakeSnapshot) copy() *fakeSnapshot {
 	fsCopy := &fakeSnapshot{
@@ -80,6 +88,7 @@ func nextStrVersion(version *int64) string {
 
 }
 
+// nolint: unparam
 func createTestWatch(c source.Watcher, collection, version string, responseC chan *source.WatchResponse, wantResponse, wantCancel bool) (*source.WatchResponse, source.CancelWatchFunc, error) { // nolint: lll
 	req := &source.Request{
 		Collection:  collection,
@@ -89,7 +98,7 @@ func createTestWatch(c source.Watcher, collection, version string, responseC cha
 
 	cancel := c.Watch(req, func(response *source.WatchResponse) {
 		responseC <- response
-	})
+	}, "192.168.1.1:1234")
 
 	if wantResponse {
 		select {
@@ -114,7 +123,7 @@ func createTestWatch(c source.Watcher, collection, version string, responseC cha
 		}
 	} else {
 		if cancel != nil {
-			return nil, nil, fmt.Errorf("wanted no cancel() function, got %v", cancel)
+			return nil, nil, fmt.Errorf("wanted no cancel() function, got %p", cancel)
 		}
 	}
 

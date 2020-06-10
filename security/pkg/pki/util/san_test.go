@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -84,6 +84,10 @@ func TestBuildAndExtractIdentities(t *testing.T) {
 
 	if !reflect.DeepEqual(actualIds, ids) {
 		t.Errorf("Unmatched identities: before encoding: %v, after decoding %v", ids, actualIds)
+	}
+
+	if san.Critical == false {
+		t.Errorf("SAN field is not critical.")
 	}
 }
 

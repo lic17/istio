@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ type Extern struct {
 //   - none                                 (i.e. func (...) {...})
 //   - a supported type                     (i.e. func (...) string {...})
 //   - error                                (i.e. func (...) error {...})
-//   - suported type and error              (i.e. func (...) string, error {...})
+//   - supported type and error              (i.e. func (...) string, error {...})
 //
 func ExternFromFn(name string, fn interface{}) Extern {
 	t := reflect.TypeOf(fn)
@@ -120,8 +120,7 @@ func ilType(t reflect.Type) il.Type {
 			return il.Interface
 		}
 	case reflect.Interface:
-		switch t.Name() {
-		case "StringMap":
+		if t.Name() == "StringMap" {
 			return il.Interface
 		}
 	}

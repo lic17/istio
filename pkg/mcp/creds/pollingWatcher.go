@@ -1,4 +1,4 @@
-//  Copyright 2018 Istio Authors
+//  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -52,16 +52,6 @@ var _ CertificateWatcher = &pollingWatcher{}
 
 func (p *pollingWatcher) certPool() *x509.CertPool {
 	return p.caCertPool
-}
-
-// PollFolder loads certificates from the given folder. It expects the
-// following files:
-// cert-chain.pem, key.pem: Certificate/key files for the client/server on this side.
-// root-cert.pem: certificate from the CA that will be used for validating peer's certificate.
-//
-// Internally PollFolder will call PollFiles.
-func PollFolder(stop <-chan struct{}, folder string) (CertificateWatcher, error) {
-	return pollFolder(stop, folder, time.Minute)
 }
 
 func pollFolder(stop <-chan struct{}, folder string, interval time.Duration) (CertificateWatcher, error) {

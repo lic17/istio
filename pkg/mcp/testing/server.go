@@ -1,4 +1,4 @@
-// Copyright 2019 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -66,7 +66,6 @@ func NewServer(port int, collections []source.CollectionOptions) (*Server, error
 	}
 
 	checker := server.NewAllowAllChecker()
-	s := server.New(options, checker)
 	srcServer := source.NewServer(options, &source.ServerOptions{
 		AuthChecker: checker,
 		RateLimiter: rate.NewRateLimiter(time.Second, 100).Create(),
@@ -88,7 +87,6 @@ func NewServer(port int, collections []source.CollectionOptions) (*Server, error
 
 	gs := grpc.NewServer()
 
-	mcp.RegisterAggregatedMeshConfigServiceServer(gs, s)
 	mcp.RegisterResourceSourceServer(gs, srcServer)
 	go func() { _ = gs.Serve(l) }()
 

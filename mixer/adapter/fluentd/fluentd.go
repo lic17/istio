@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // nolint: lll
-//go:generate $GOPATH/src/istio.io/istio/bin/mixer_codegen.sh -a mixer/adapter/fluentd/config/config.proto -x "-n fluentd -t logentry"
+//go:generate $REPO_ROOT/bin/mixer_codegen.sh -a mixer/adapter/fluentd/config/config.proto -x "-n fluentd -t logentry"
 
 // Package fluentd adapter for Mixer. Conforms to interfaces in
 // mixer/pkg/adapter. Accepts logentries and forwards to a listening
@@ -33,6 +33,7 @@ import (
 
 	descriptor "istio.io/api/policy/v1beta1"
 	"istio.io/istio/mixer/adapter/fluentd/config"
+	"istio.io/istio/mixer/adapter/metadata"
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/template/logentry"
 )
@@ -41,10 +42,6 @@ const (
 	defaultBufferSize    int64 = 1024
 	defaultMaxBatchBytes int64 = 8 * 1024 * 1024
 	defaultTimeout             = 1 * time.Minute
-)
-
-var (
-	defaultAddress = "localhost:24224"
 )
 
 type (
@@ -129,7 +126,7 @@ func (b *builder) build(_ context.Context, env adapter.Env, newFluentd func(flue
 		pushInterval:  interval,
 		pushTimeout:   timeout,
 	}
-	han.logger, err = newFluentd(fluent.Config{FluentPort: p, FluentHost: h, BufferLimit: int(batchBytes), WriteTimeout: timeout})
+	han.logger, err = newFluentd(fluent.Config{FluentPort: p, FluentHost: h, BufferLimit: int(batchBytes), WriteTimeout: timeout, SubSecondPrecision: true})
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +215,7 @@ func (h *handler) HandleLogEntry(ctx context.Context, insts []*logentry.Instance
 	for _, i := range insts {
 		h.env.Logger().Debugf("Got a new log for fluentd, name %v", i.Name)
 
-		// Durations are not supported by msgp
+		// Durations are not supported by msgp, also converts IP address to string
 		for k, v := range i.Variables {
 			if h.types[i.Name].Variables[k] == descriptor.DURATION {
 				if h.intDur {
@@ -227,6 +224,14 @@ func (h *handler) HandleLogEntry(ctx context.Context, insts []*logentry.Instance
 				} else {
 					d := v.(time.Duration)
 					i.Variables[k] = d.String()
+				}
+			}
+			if h.types[i.Name].Variables[k] == descriptor.IP_ADDRESS {
+				switch ip := v.(type) {
+				case net.IP:
+					i.Variables[k] = ip.String()
+				case []byte:
+					i.Variables[k] = net.IP(ip).String()
 				}
 			}
 		}
@@ -268,15 +273,7 @@ func (h *handler) Close() (err error) {
 
 // GetInfo returns the adapter.Info specific to this adapter.
 func GetInfo() adapter.Info {
-	return adapter.Info{
-		Name:        "fluentd",
-		Description: "Sends logentrys to a fluentd instance",
-		SupportedTemplates: []string{
-			logentry.TemplateName,
-		},
-		NewBuilder: func() adapter.HandlerBuilder { return &builder{} },
-		DefaultConfig: &config.Params{
-			Address: defaultAddress,
-		},
-	}
+	info := metadata.GetInfo("fluentd")
+	info.NewBuilder = func() adapter.HandlerBuilder { return &builder{} }
+	return info
 }

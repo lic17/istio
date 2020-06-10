@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // nolint:lll
-//go:generate go run $GOPATH/src/istio.io/istio/mixer/tools/mixgen/main.go adapter -n listbackend-nosession -c $GOPATH/src/istio.io/istio/mixer/adapter/list/config/config.proto_descriptor -s=false -t listentry -o nosession.yaml
+//go:generate go run $REPO_ROOT/mixer/tools/mixgen/main.go adapter -n listbackend-nosession -c $REPO_ROOT/mixer/adapter/list/config/config.proto_descriptor -s=false -t listentry -o nosession.yaml
 
 package listbackend
 
@@ -30,9 +30,9 @@ import (
 	"istio.io/istio/mixer/adapter/list"
 	"istio.io/istio/mixer/adapter/list/config"
 	"istio.io/istio/mixer/pkg/adapter"
-	"istio.io/istio/mixer/pkg/pool"
 	"istio.io/istio/mixer/pkg/runtime/handler"
 	"istio.io/istio/mixer/template/listentry"
+	"istio.io/pkg/pool"
 )
 
 type (
@@ -63,7 +63,7 @@ var _ listentry.HandleListEntryServiceServer = &nosessionServer{}
 
 func (s *nosessionServer) getHandler(rawcfg []byte) (listentry.Handler, error) {
 	s.builderLock.RLock()
-	if 0 == bytes.Compare(rawcfg, s.rawcfg) {
+	if bytes.Equal(rawcfg, s.rawcfg) {
 		h := s.h
 		s.builderLock.RUnlock()
 		return h, nil
@@ -79,7 +79,7 @@ func (s *nosessionServer) getHandler(rawcfg []byte) (listentry.Handler, error) {
 	s.builderLock.Lock()
 	defer s.builderLock.Unlock()
 
-	if 0 == bytes.Compare(rawcfg, s.rawcfg) {
+	if bytes.Equal(rawcfg, s.rawcfg) {
 		return s.h, nil
 	}
 
@@ -180,7 +180,7 @@ func NewNoSessionServer(addr string) (Server, error) {
 	s := &nosessionServer{
 		listener: listener,
 		builder:  listInf.NewBuilder(),
-		env:      handler.NewEnv(0, "list-backend-nosession", pool.NewGoroutinePool(5, false)),
+		env:      handler.NewEnv(0, "list-backend-nosession", pool.NewGoroutinePool(5, false), []string{""}),
 		rawcfg:   []byte{},
 	}
 	fmt.Printf("listening on :%v\n", s.listener.Addr())

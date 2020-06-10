@@ -14,81 +14,27 @@ enforcement within Istio. It is primarily concerned with enabling Mixer</p>
 <p>Example config:</p>
 
 <pre><code class="language-yaml">apiVersion: &quot;config.istio.io/v1alpha2&quot;
-kind: authorization
+kind: instance
 metadata:
   name: authinfo
   namespace: istio-system
 spec:
- subject:
-   user: source.user | request.auth.token[user] | &quot;&quot;
-   groups: request.auth.token[groups]
-   properties:
-    iss: request.auth.token[&quot;iss&quot;]
- action:
-   namespace: destination.namespace | &quot;default&quot;
-   service: destination.service | &quot;&quot;
-   path: request.path | &quot;/&quot;
-   method: request.method | &quot;post&quot;
-   properties:
-     version: destination.labels[version] | &quot;&quot;
+  compiledTemplate: authorization
+  params:
+    subject:
+      user: source.principal | request.auth.principal | &quot;&quot;
+      groups: request.auth.claims[&quot;groups&quot;] | &quot;&quot;
+      properties:
+        iss: request.auth.claims[&quot;iss&quot;]
+    action:
+      namespace: destination.namespace | &quot;default&quot;
+      service: destination.service.host | &quot;&quot;
+      path: request.path | &quot;/&quot;
+      method: request.method | &quot;post&quot;
+      properties:
+        version: destination.labels[version] | &quot;&quot;
 </code></pre>
 
-<h2 id="Action">Action</h2>
-<section>
-<p>An action defines &ldquo;how a resource is accessed&rdquo;.</p>
-
-<table class="message-fields">
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr id="Action-namespace">
-<td><code>namespace</code></td>
-<td><code>string</code></td>
-<td>
-<p>Namespace the target action is taking place in.</p>
-
-</td>
-</tr>
-<tr id="Action-service">
-<td><code>service</code></td>
-<td><code>string</code></td>
-<td>
-<p>The Service the action is being taken on.</p>
-
-</td>
-</tr>
-<tr id="Action-method">
-<td><code>method</code></td>
-<td><code>string</code></td>
-<td>
-<p>What action is being taken.</p>
-
-</td>
-</tr>
-<tr id="Action-path">
-<td><code>path</code></td>
-<td><code>string</code></td>
-<td>
-<p>HTTP REST path within the service</p>
-
-</td>
-</tr>
-<tr id="Action-properties">
-<td><code>properties</code></td>
-<td><code>map&lt;string,&nbsp;<a href="https://istio.io/docs/reference/config/policy-and-telemetry/istio.policy.v1beta1.html#Value">istio.policy.v1beta1.Value</a>&gt;</code></td>
-<td>
-<p>Additional data about the action for use in policy.</p>
-
-</td>
-</tr>
-</tbody>
-</table>
-</section>
 <h2 id="Subject">Subject</h2>
 <section>
 <p>A subject contains a list of attributes that identify
@@ -100,6 +46,7 @@ the caller identity.</p>
 <th>Field</th>
 <th>Type</th>
 <th>Description</th>
+<th>Required</th>
 </tr>
 </thead>
 <tbody>
@@ -109,6 +56,9 @@ the caller identity.</p>
 <td>
 <p>The user name/ID that the subject represents.</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 <tr id="Subject-groups">
@@ -121,13 +71,91 @@ The operator can define how it is populated when creating an instance of
 the template.</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Subject-properties">
 <td><code>properties</code></td>
-<td><code>map&lt;string,&nbsp;<a href="https://istio.io/docs/reference/config/policy-and-telemetry/istio.policy.v1beta1.html#Value">istio.policy.v1beta1.Value</a>&gt;</code></td>
+<td><code>map&lt;string,&nbsp;<a href="https://istio.io/docs/reference/config/policy-and-telemetry/istio.policy.v1beta1.html#Value">Value</a>&gt;</code></td>
 <td>
 <p>Additional attributes about the subject.</p>
 
+</td>
+<td>
+No
+</td>
+</tr>
+</tbody>
+</table>
+</section>
+<h2 id="Action">Action</h2>
+<section>
+<p>An action defines &ldquo;how a resource is accessed&rdquo;.</p>
+
+<table class="message-fields">
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr id="Action-namespace">
+<td><code>namespace</code></td>
+<td><code>string</code></td>
+<td>
+<p>Namespace the target action is taking place in.</p>
+
+</td>
+<td>
+No
+</td>
+</tr>
+<tr id="Action-service">
+<td><code>service</code></td>
+<td><code>string</code></td>
+<td>
+<p>The Service the action is being taken on.</p>
+
+</td>
+<td>
+No
+</td>
+</tr>
+<tr id="Action-method">
+<td><code>method</code></td>
+<td><code>string</code></td>
+<td>
+<p>What action is being taken.</p>
+
+</td>
+<td>
+No
+</td>
+</tr>
+<tr id="Action-path">
+<td><code>path</code></td>
+<td><code>string</code></td>
+<td>
+<p>HTTP REST path within the service</p>
+
+</td>
+<td>
+No
+</td>
+</tr>
+<tr id="Action-properties">
+<td><code>properties</code></td>
+<td><code>map&lt;string,&nbsp;<a href="https://istio.io/docs/reference/config/policy-and-telemetry/istio.policy.v1beta1.html#Value">Value</a>&gt;</code></td>
+<td>
+<p>Additional data about the action for use in policy.</p>
+
+</td>
+<td>
+No
 </td>
 </tr>
 </tbody>
@@ -149,6 +177,7 @@ passed to individual authorization adapters to adjudicate.</p>
 <th>Field</th>
 <th>Type</th>
 <th>Description</th>
+<th>Required</th>
 </tr>
 </thead>
 <tbody>
@@ -160,6 +189,9 @@ passed to individual authorization adapters to adjudicate.</p>
 the caller identity.</p>
 
 </td>
+<td>
+No
+</td>
 </tr>
 <tr id="Template-action">
 <td><code>action</code></td>
@@ -167,6 +199,9 @@ the caller identity.</p>
 <td>
 <p>An action defines &ldquo;how a resource is accessed&rdquo;.</p>
 
+</td>
+<td>
+No
 </td>
 </tr>
 </tbody>

@@ -26,9 +26,12 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/client-go/kubernetes/fake"
 
+	"istio.io/istio/pkg/jwt"
 	"istio.io/istio/security/pkg/pki/ca"
 	mockca "istio.io/istio/security/pkg/pki/ca/mock"
+	caerror "istio.io/istio/security/pkg/pki/error"
 	mockutil "istio.io/istio/security/pkg/pki/util/mock"
 	"istio.io/istio/security/pkg/server/ca/authenticate"
 	pb "istio.io/istio/security/proto"
@@ -64,32 +67,14 @@ gCojNs0xyJ77JA80HLY7iR4J6BRYsZQ/5UB/pYR55e4TGFDbI+C/6NBqLkzEfyX0
 1sT/u25qExkefck=
 -----END CERTIFICATE REQUEST-----`
 
-type mockCA struct {
-	cert      string
-	root      string
-	certChain string
-	errMsg    string
-}
-
-func (ca *mockCA) Sign(csrPEM []byte, ttl time.Duration, forCA bool) ([]byte, error) {
-	if ca.errMsg != "" {
-		return nil, fmt.Errorf(ca.errMsg)
-	}
-	return []byte(ca.cert), nil
-}
-
-func (ca *mockCA) GetRootCertificate() []byte {
-	return []byte(ca.root)
-}
-
-func (ca *mockCA) GetCertChain() []byte {
-	return []byte(ca.certChain)
-}
-
 type mockAuthenticator struct {
 	authSource authenticate.AuthSource
 	identities []string
 	errMsg     string
+}
+
+func (authn *mockAuthenticator) AuthenticatorType() string {
+	return "mockAuthenticator"
 }
 
 func (authn *mockAuthenticator) Authenticate(ctx context.Context) (*authenticate.Caller, error) {
@@ -103,67 +88,47 @@ func (authn *mockAuthenticator) Authenticate(ctx context.Context) (*authenticate
 	}, nil
 }
 
-type mockAuthorizer struct {
-	errMsg string
-}
-
-// nolint: unparam
-func (authz *mockAuthorizer) authorize(requester *authenticate.Caller, requestedIds []string) error {
-	if len(authz.errMsg) > 0 {
-		return fmt.Errorf("%v", authz.errMsg)
-	}
-	return nil
-}
-
 func TestCreateCertificate(t *testing.T) {
 	testCases := map[string]struct {
-		authenticators []authenticator
-		authorizer     *mockAuthorizer
-		ca             ca.CertificateAuthority
+		authenticators []authenticate.Authenticator
+		ca             CertificateAuthority
 		certChain      []string
 		code           codes.Code
 	}{
 		"No authenticator": {
 			authenticators: nil,
 			code:           codes.Unauthenticated,
-			authorizer:     &mockAuthorizer{},
 			ca:             &mockca.FakeCA{},
 		},
 		"Unauthenticated request": {
-			authenticators: []authenticator{&mockAuthenticator{
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{
 				errMsg: "Not authorized",
 			}},
-			code:       codes.Unauthenticated,
-			authorizer: &mockAuthorizer{},
-			ca:         &mockca.FakeCA{},
+			code: codes.Unauthenticated,
+			ca:   &mockca.FakeCA{},
 		},
 		"CA not ready": {
-			authorizer:     &mockAuthorizer{},
-			authenticators: []authenticator{&mockAuthenticator{}},
-			ca:             &mockca.FakeCA{SignErr: ca.NewError(ca.CANotReady, fmt.Errorf("cannot sign"))},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{}},
+			ca:             &mockca.FakeCA{SignErr: caerror.NewError(caerror.CANotReady, fmt.Errorf("cannot sign"))},
 			code:           codes.Internal,
 		},
 		"Invalid CSR": {
-			authorizer:     &mockAuthorizer{},
-			authenticators: []authenticator{&mockAuthenticator{}},
-			ca:             &mockca.FakeCA{SignErr: ca.NewError(ca.CSRError, fmt.Errorf("cannot sign"))},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{}},
+			ca:             &mockca.FakeCA{SignErr: caerror.NewError(caerror.CSRError, fmt.Errorf("cannot sign"))},
 			code:           codes.InvalidArgument,
 		},
 		"Invalid TTL": {
-			authorizer:     &mockAuthorizer{},
-			authenticators: []authenticator{&mockAuthenticator{}},
-			ca:             &mockca.FakeCA{SignErr: ca.NewError(ca.TTLError, fmt.Errorf("cannot sign"))},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{}},
+			ca:             &mockca.FakeCA{SignErr: caerror.NewError(caerror.TTLError, fmt.Errorf("cannot sign"))},
 			code:           codes.InvalidArgument,
 		},
 		"Failed to sign": {
-			authorizer:     &mockAuthorizer{},
-			authenticators: []authenticator{&mockAuthenticator{}},
-			ca:             &mockca.FakeCA{SignErr: ca.NewError(ca.CertGenError, fmt.Errorf("cannot sign"))},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{}},
+			ca:             &mockca.FakeCA{SignErr: caerror.NewError(caerror.CertGenError, fmt.Errorf("cannot sign"))},
 			code:           codes.Internal,
 		},
 		"Successful signing": {
-			authenticators: []authenticator{&mockAuthenticator{}},
-			authorizer:     &mockAuthorizer{},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{}},
 			ca: &mockca.FakeCA{
 				SignedCert: []byte("cert"),
 				KeyCertBundle: &mockutil.FakeKeyCertBundle{
@@ -181,8 +146,7 @@ func TestCreateCertificate(t *testing.T) {
 			ca:             c.ca,
 			hostnames:      []string{"hostname"},
 			port:           8080,
-			authorizer:     c.authorizer,
-			authenticators: c.authenticators,
+			Authenticators: c.authenticators,
 			monitoring:     newMonitoringMetrics(),
 		}
 		request := &pb.IstioCertificateRequest{Csr: "dumb CSR"}
@@ -210,60 +174,69 @@ func TestCreateCertificate(t *testing.T) {
 
 func TestHandleCSR(t *testing.T) {
 	testCases := map[string]struct {
-		authenticators []authenticator
-		authorizer     *mockAuthorizer
-		ca             ca.CertificateAuthority
+		authenticators []authenticate.Authenticator
+		ca             *mockca.FakeCA
 		csr            string
 		cert           string
 		certChain      string
+		expectedIDs    []string
 		code           codes.Code
 	}{
 		"No authenticator": {
 			authenticators: nil,
+			ca:             &mockca.FakeCA{SignErr: caerror.NewError(caerror.CANotReady, fmt.Errorf("cannot sign"))},
 			code:           codes.Unauthenticated,
-			authorizer:     &mockAuthorizer{},
-			ca:             &mockca.FakeCA{SignErr: ca.NewError(ca.CANotReady, fmt.Errorf("cannot sign"))},
 		},
 		"Unauthenticated request": {
-			authenticators: []authenticator{&mockAuthenticator{
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{
 				errMsg: "Not authorized",
 			}},
-			code:       codes.Unauthenticated,
-			authorizer: &mockAuthorizer{},
-			ca:         &mockca.FakeCA{SignErr: ca.NewError(ca.CANotReady, fmt.Errorf("cannot sign"))},
+			ca:   &mockca.FakeCA{SignErr: caerror.NewError(caerror.CANotReady, fmt.Errorf("cannot sign"))},
+			code: codes.Unauthenticated,
+		},
+		"No caller authenticated": {
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{}},
+			code:           codes.Unauthenticated,
 		},
 		"Corrupted CSR": {
-			authorizer:     &mockAuthorizer{},
-			authenticators: []authenticator{&mockAuthenticator{}},
-			ca:             &mockca.FakeCA{SignErr: ca.NewError(ca.CANotReady, fmt.Errorf("cannot sign"))},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{identities: []string{"test"}}},
 			csr:            "deadbeef",
 			code:           codes.InvalidArgument,
 		},
 		"Invalid SAN CSR": {
-			authorizer:     &mockAuthorizer{},
-			authenticators: []authenticator{&mockAuthenticator{}},
-			ca:             &mockca.FakeCA{SignErr: ca.NewError(ca.CANotReady, fmt.Errorf("cannot sign"))},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{identities: []string{"test"}}},
 			csr:            badSanCsr,
 			code:           codes.InvalidArgument,
 		},
 		"Failed to sign": {
-			authorizer:     &mockAuthorizer{},
-			authenticators: []authenticator{&mockAuthenticator{}},
-			ca:             &mockca.FakeCA{SignErr: ca.NewError(ca.CANotReady, fmt.Errorf("cannot sign"))},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{identities: []string{"test"}}},
+			ca:             &mockca.FakeCA{SignErr: caerror.NewError(caerror.CANotReady, fmt.Errorf("cannot sign"))},
 			csr:            csr,
 			code:           codes.Internal,
 		},
 		"Successful signing": {
-			authenticators: []authenticator{&mockAuthenticator{}},
-			authorizer:     &mockAuthorizer{},
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{identities: []string{"test"}}},
 			ca: &mockca.FakeCA{
 				SignedCert:    []byte("generated cert"),
 				KeyCertBundle: &mockutil.FakeKeyCertBundle{CertChainBytes: []byte("cert chain")},
 			},
-			csr:       csr,
-			cert:      "generated cert",
-			certChain: "cert chain",
-			code:      codes.OK,
+			csr:         csr,
+			cert:        "generated cert",
+			certChain:   "cert chain",
+			expectedIDs: []string{"test"},
+			code:        codes.OK,
+		},
+		"Multiple identities received by CA signer": {
+			authenticators: []authenticate.Authenticator{&mockAuthenticator{identities: []string{"test1", "test2"}}},
+			ca: &mockca.FakeCA{
+				SignedCert:    []byte("generated cert"),
+				KeyCertBundle: &mockutil.FakeKeyCertBundle{CertChainBytes: []byte("cert chain")},
+			},
+			csr:         csr,
+			cert:        "generated cert",
+			certChain:   "cert chain",
+			expectedIDs: []string{"test1", "test2"},
+			code:        codes.OK,
 		},
 	}
 
@@ -272,8 +245,7 @@ func TestHandleCSR(t *testing.T) {
 			ca:             c.ca,
 			hostnames:      []string{"hostname"},
 			port:           8080,
-			authorizer:     c.authorizer,
-			authenticators: c.authenticators,
+			Authenticators: c.authenticators,
 			monitoring:     newMonitoringMetrics(),
 		}
 		request := &pb.CsrRequest{CsrPem: []byte(c.csr)}
@@ -290,7 +262,19 @@ func TestHandleCSR(t *testing.T) {
 			if !bytes.Equal(response.CertChain, []byte(c.certChain)) {
 				t.Errorf("Case %s: expecting cert chain to be (%s) but got (%s)", id, c.certChain, response.CertChain)
 			}
-
+		}
+		if c.expectedIDs != nil {
+			receivedIDs := c.ca.ReceivedIDs
+			if len(receivedIDs) != len(c.expectedIDs) {
+				t.Errorf("Case %s: CA received different IDs (%v) than the callers (%v)",
+					id, receivedIDs, c.expectedIDs)
+			}
+			for i, v := range receivedIDs {
+				if v != c.expectedIDs[i] {
+					t.Errorf("Case %s: CA received different IDs (%v) than the callers (%v)",
+						id, receivedIDs, c.expectedIDs)
+				}
+			}
 		}
 	}
 }
@@ -341,12 +325,12 @@ func TestRun(t *testing.T) {
 		}
 	}
 	testCases := map[string]struct {
-		ca                          *mockca.FakeCA
-		hostname                    []string
-		port                        int
-		expectedErr                 string
-		applyServerCertificateError string
-		expectedAuthenticatorsLen   int
+		ca                        *mockca.FakeCA
+		hostname                  []string
+		port                      int
+		expectedErr               string
+		getServerCertificateError string
+		expectedAuthenticatorsLen int
 	}{
 		"Invalid listening port number": {
 			ca:          &mockca.FakeCA{SignedCert: []byte(csr)},
@@ -355,28 +339,28 @@ func TestRun(t *testing.T) {
 			expectedErr: "cannot listen on port -1 (error: listen tcp: address -1: invalid port)",
 		},
 		"CA sign error": {
-			ca:                          &mockca.FakeCA{SignErr: ca.NewError(ca.CANotReady, fmt.Errorf("cannot sign"))},
-			hostname:                    []string{"localhost"},
-			port:                        0,
-			expectedErr:                 "",
-			expectedAuthenticatorsLen:   1, // 2 when ID token authenticators are enabled.
-			applyServerCertificateError: "cannot sign",
+			ca:                        &mockca.FakeCA{SignErr: caerror.NewError(caerror.CANotReady, fmt.Errorf("cannot sign"))},
+			hostname:                  []string{"localhost"},
+			port:                      0,
+			expectedErr:               "",
+			expectedAuthenticatorsLen: 2, // 2 when ID token authenticators are enabled.
+			getServerCertificateError: "cannot sign",
 		},
 		"Bad signed cert": {
 			ca:                        &mockca.FakeCA{SignedCert: []byte(csr)},
 			hostname:                  []string{"localhost"},
 			port:                      0,
 			expectedErr:               "",
-			expectedAuthenticatorsLen: 1, // 2 when ID token authenticators are enabled.
-			applyServerCertificateError: "tls: failed to find \"CERTIFICATE\" PEM block in certificate " +
+			expectedAuthenticatorsLen: 2, // 2 when ID token authenticators are enabled.
+			getServerCertificateError: "tls: failed to find \"CERTIFICATE\" PEM block in certificate " +
 				"input after skipping PEM blocks of the following types: [CERTIFICATE REQUEST]",
 		},
 		"Multiple hostname": {
 			ca:                        &mockca.FakeCA{SignedCert: []byte(csr)},
 			hostname:                  []string{"localhost", "fancyhost"},
 			port:                      0,
-			expectedAuthenticatorsLen: 1, // 3 when ID token authenticators are enabled.
-			applyServerCertificateError: "tls: failed to find \"CERTIFICATE\" PEM block in certificate " +
+			expectedAuthenticatorsLen: 2, // 3 when ID token authenticators are enabled.
+			getServerCertificateError: "tls: failed to find \"CERTIFICATE\" PEM block in certificate " +
 				"input after skipping PEM blocks of the following types: [CERTIFICATE REQUEST]",
 		},
 		"Empty hostnames": {
@@ -389,9 +373,10 @@ func TestRun(t *testing.T) {
 	for id, tc := range testCases {
 		if k8sEnv {
 			// K8s JWT authenticator is added in k8s env.
-			tc.expectedAuthenticatorsLen = tc.expectedAuthenticatorsLen + 1
+			tc.expectedAuthenticatorsLen++
 		}
-		server, err := New(tc.ca, time.Hour, false, tc.hostname, tc.port, "testdomain.com")
+		server, err := New(tc.ca, time.Hour, false, tc.hostname, tc.port, "testdomain.com", true,
+			jwt.PolicyThirdParty, "kubernetes")
 		if err == nil {
 			err = server.Run()
 		}
@@ -407,9 +392,9 @@ func TestRun(t *testing.T) {
 			t.Fatalf("%s: Unexpected Error: %v", id, err)
 		}
 
-		if len(server.authenticators) != tc.expectedAuthenticatorsLen {
+		if len(server.Authenticators) != tc.expectedAuthenticatorsLen {
 			t.Fatalf("%s: Unexpected Authenticators Length. Expected: %v Actual: %v",
-				id, tc.expectedAuthenticatorsLen, len(server.authenticators))
+				id, tc.expectedAuthenticatorsLen, len(server.Authenticators))
 		}
 
 		if len(tc.hostname) != len(server.hostnames) {
@@ -421,17 +406,74 @@ func TestRun(t *testing.T) {
 			}
 		}
 
-		_, err = server.applyServerCertificate()
-		if len(tc.applyServerCertificateError) > 0 {
+		_, err = server.getServerCertificate()
+		if len(tc.getServerCertificateError) > 0 {
 			if err == nil {
 				t.Errorf("%s: Succeeded. Error expected: %v", id, err)
-			} else if err.Error() != tc.applyServerCertificateError {
+			} else if err.Error() != tc.getServerCertificateError {
 				t.Errorf("%s: incorrect error message: %s VS %s",
-					id, err.Error(), tc.applyServerCertificateError)
+					id, err.Error(), tc.getServerCertificateError)
 			}
 			continue
 		} else if err != nil {
 			t.Fatalf("%s: Unexpected Error: %v", id, err)
+		}
+	}
+}
+
+func TestGetServerCertificate(t *testing.T) {
+	cases := map[string]struct {
+		rootCertFile    string
+		certChainFile   string
+		signingCertFile string
+		signingKeyFile  string
+	}{
+		"RSA server cert": {
+			rootCertFile:    "../../pki/testdata/multilevelpki/root-cert.pem",
+			certChainFile:   "../../pki/testdata/multilevelpki/int2-cert-chain.pem",
+			signingCertFile: "../../pki/testdata/multilevelpki/int2-cert.pem",
+			signingKeyFile:  "../../pki/testdata/multilevelpki/int2-key.pem",
+		},
+		"ECC server cert": {
+			rootCertFile:    "../../pki/testdata/multilevelpki/ecc-root-cert.pem",
+			certChainFile:   "../../pki/testdata/multilevelpki/ecc-int2-cert-chain.pem",
+			signingCertFile: "../../pki/testdata/multilevelpki/ecc-int2-cert.pem",
+			signingKeyFile:  "../../pki/testdata/multilevelpki/ecc-int2-key.pem",
+		},
+	}
+	caNamespace := "default"
+
+	defaultWorkloadCertTTL := 30 * time.Minute
+	maxWorkloadCertTTL := time.Hour
+
+	for id, tc := range cases {
+		client := fake.NewSimpleClientset()
+
+		caopts, err := ca.NewPluggedCertIstioCAOptions(tc.certChainFile, tc.signingCertFile, tc.signingKeyFile, tc.rootCertFile,
+			defaultWorkloadCertTTL, maxWorkloadCertTTL, caNamespace, client.CoreV1())
+		if err != nil {
+			t.Fatalf("%s: Failed to create a plugged-cert CA Options: %v", id, err)
+		}
+
+		ca, err := ca.NewIstioCA(caopts)
+		if err != nil {
+			t.Errorf("%s: Got error while creating plugged-cert CA: %v", id, err)
+		}
+		if ca == nil {
+			t.Fatalf("Failed to create a plugged-cert CA.")
+		}
+
+		server, err := New(ca, time.Hour, false, []string{"localhost"}, 0,
+			"testdomain.com", true, jwt.PolicyThirdParty, "kubernetes")
+		if err != nil {
+			t.Errorf("%s: Cannot crete server: %v", id, err)
+		}
+		cert, err := server.getServerCertificate()
+		if err != nil {
+			t.Errorf("%s: getServerCertificate error: %v", id, err)
+		}
+		if len(cert.Certificate) != 4 {
+			t.Errorf("Unexpected number of certificates returned: %d (expected 4)", len(cert.Certificate))
 		}
 	}
 }

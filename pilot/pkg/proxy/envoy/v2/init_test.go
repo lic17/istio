@@ -1,4 +1,4 @@
-// Copyright 2018 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,43 +15,63 @@ package v2_test
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"time"
 
-	xdsapi "github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	ads "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
-	"github.com/gogo/googleapis/google/rpc"
-	proto "github.com/gogo/protobuf/types"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	"github.com/golang/protobuf/ptypes"
+	structpb "github.com/golang/protobuf/ptypes/struct"
+
+	"istio.io/istio/pkg/adsc"
 
 	"istio.io/istio/pilot/pkg/model"
+
 	v2 "istio.io/istio/pilot/pkg/proxy/envoy/v2"
-	"istio.io/istio/pkg/test/env"
+	v3 "istio.io/istio/pilot/pkg/proxy/envoy/v3"
+
+	xdsapi "github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	corev2 "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
+	ads "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
+	"google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/grpc"
+
 	"istio.io/istio/tests/util"
 )
 
-var nodeMetadata = &proto.Struct{Fields: map[string]*proto.Value{
-	"ISTIO_PROXY_VERSION": {Kind: &proto.Value_StringValue{StringValue: "1.1"}}, // actual value doesn't matter
+var nodeMetadata = &structpb.Struct{Fields: map[string]*structpb.Value{
+	"ISTIO_VERSION": {Kind: &structpb.Value_StringValue{StringValue: "1.3"}}, // actual value doesn't matter
 }}
 
 // Extract cluster load assignment from a discovery response.
-func getLoadAssignment(res1 *xdsapi.DiscoveryResponse) (*xdsapi.ClusterLoadAssignment, error) {
-	if res1.TypeUrl != "type.googleapis.com/envoy.api.v2.ClusterLoadAssignment" {
+func getLoadAssignmentV2(res1 *xdsapi.DiscoveryResponse) (*endpoint.ClusterLoadAssignment, error) {
+	if res1.TypeUrl != v3.EndpointType {
 		return nil, errors.New("Invalid typeURL" + res1.TypeUrl)
 	}
-	if res1.Resources[0].TypeUrl != "type.googleapis.com/envoy.api.v2.ClusterLoadAssignment" {
+	if res1.Resources[0].TypeUrl != v3.EndpointType {
 		return nil, errors.New("Invalid resource typeURL" + res1.Resources[0].TypeUrl)
 	}
-	cla := &xdsapi.ClusterLoadAssignment{}
-	err := cla.Unmarshal(res1.Resources[0].Value)
+	cla := &endpoint.ClusterLoadAssignment{}
+	err := ptypes.UnmarshalAny(res1.Resources[0], cla)
+	if err != nil {
+		return nil, err
+	}
+	return cla, nil
+}
+
+func getLoadAssignment(res1 *discovery.DiscoveryResponse) (*endpoint.ClusterLoadAssignment, error) {
+	if res1.TypeUrl != v3.EndpointType {
+		return nil, errors.New("Invalid typeURL" + res1.TypeUrl)
+	}
+	if res1.Resources[0].TypeUrl != v3.EndpointType {
+		return nil, errors.New("Invalid resource typeURL" + res1.Resources[0].TypeUrl)
+	}
+	cla := &endpoint.ClusterLoadAssignment{}
+	err := ptypes.UnmarshalAny(res1.Resources[0], cla)
 	if err != nil {
 		return nil, err
 	}
@@ -64,66 +84,62 @@ func testIP(id uint32) string {
 	return net.IP(ipb).String()
 }
 
+// connectADS creates a direct, insecure connection using raw GRPC
 func connectADS(url string) (ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient, util.TearDownFunc, error) {
 	conn, err := grpc.Dial(url, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		return nil, nil, fmt.Errorf("GRPC dial failed: %s", err)
 	}
 	xds := ads.NewAggregatedDiscoveryServiceClient(conn)
-	edsstr, err := xds.StreamAggregatedResources(context.Background())
+	client, err := xds.StreamAggregatedResources(context.Background())
 	if err != nil {
 		return nil, nil, fmt.Errorf("stream resources failed: %s", err)
 	}
 
-	return edsstr, func() {
-		edsstr.CloseSend()
-		conn.Close()
+	return client, func() {
+		_ = client.CloseSend()
+		_ = conn.Close()
 	}, nil
 }
 
-func connectADSS(url string) (ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient, util.TearDownFunc, error) {
-	certDir := env.IstioSrc + "/tests/testdata/certs/default/"
-
-	clientCert, err := tls.LoadX509KeyPair(certDir+model.CertChainFilename, certDir+model.KeyFilename)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed loading clients certs: %s", err)
+// connectADSC creates a connection using ASDC client.
+// If certDir is specified, will use MTLS.
+// This has more functionality than 'raw' grpc connection, including
+// sending a more realistic mode metadata.
+func connectADSC(url string, cfg *adsc.Config) (*adsc.ADSC, util.TearDownFunc, error) {
+	if cfg == nil {
+		cfg = &adsc.Config{}
 	}
 
-	serverCABytes, err := ioutil.ReadFile(certDir + model.RootCertFilename)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed loading CA certs: %s", err)
-	}
-	serverCAs := x509.NewCertPool()
-	if ok := serverCAs.AppendCertsFromPEM(serverCABytes); !ok {
-		return nil, nil, fmt.Errorf("failed adding CA certs to pool: %s", err)
+	if cfg.IP == "" {
+		cfg.IP = "10.11.0.1"
 	}
 
-	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{clientCert},
-		RootCAs:      serverCAs,
-		ServerName:   "istio-pilot.istio-system.svc",
+	// Fill in defaults
+	if cfg.Namespace == "" {
+		cfg.Namespace = "none"
 	}
 
-	creds := credentials.NewTLS(tlsCfg)
+	adsc, err := adsc.Dial(url, cfg.CertDir, cfg)
+	return adsc, func() {
+		adsc.Close()
+	}, err
+}
 
-	opts := []grpc.DialOption{
-		// Verify Pilot cert and service account
-		grpc.WithTransportCredentials(creds),
-		grpc.WithBlock(),
-	}
-	conn, err := grpc.Dial(url, opts...)
+func connectADSV3(url string) (discovery.AggregatedDiscoveryService_StreamAggregatedResourcesClient, util.TearDownFunc, error) {
+	conn, err := grpc.Dial(url, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		return nil, nil, fmt.Errorf("GRPC dial failed: %s", err)
 	}
-
-	xds := ads.NewAggregatedDiscoveryServiceClient(conn)
-	edsstr, err := xds.StreamAggregatedResources(context.Background())
+	xds := discovery.NewAggregatedDiscoveryServiceClient(conn)
+	client, err := xds.StreamAggregatedResources(context.Background())
 	if err != nil {
 		return nil, nil, fmt.Errorf("stream resources failed: %s", err)
 	}
-	return edsstr, func() {
-		edsstr.CloseSend()
-		conn.Close()
+
+	return client, func() {
+		_ = client.CloseSend()
+		_ = conn.Close()
 	}, nil
 }
 
@@ -144,14 +160,31 @@ func adsReceive(ads ads.AggregatedDiscoveryService_StreamAggregatedResourcesClie
 	return ads.Recv()
 }
 
+func adsReceiveV3(ads discovery.AggregatedDiscoveryService_StreamAggregatedResourcesClient, to time.Duration) (*discovery.DiscoveryResponse, error) {
+	done := make(chan int, 1)
+	t := time.NewTimer(to)
+	defer func() {
+		done <- 1
+	}()
+	go func() {
+		select {
+		case <-t.C:
+			_ = ads.CloseSend() // will result in adsRecv closing as well, interrupting the blocking recv
+		case <-done:
+			_ = t.Stop()
+		}
+	}()
+	return ads.Recv()
+}
+
 func sendEDSReq(clusters []string, node string, edsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
 	err := edsstr.Send(&xdsapi.DiscoveryRequest{
 		ResponseNonce: time.Now().String(),
-		Node: &core.Node{
+		Node: &corev2.Node{
 			Id:       node,
 			Metadata: nodeMetadata,
 		},
-		TypeUrl:       v2.EndpointType,
+		TypeUrl:       v3.EndpointType,
 		ResourceNames: clusters,
 	})
 	if err != nil {
@@ -161,33 +194,20 @@ func sendEDSReq(clusters []string, node string, edsstr ads.AggregatedDiscoverySe
 	return nil
 }
 
-func sendEDSNack(_ []string, node string, edsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
-	err := edsstr.Send(&xdsapi.DiscoveryRequest{
-		ResponseNonce: time.Now().String(),
-		Node: &core.Node{
-			Id:       node,
-			Metadata: nodeMetadata,
-		},
-		TypeUrl:     v2.EndpointType,
-		ErrorDetail: &rpc.Status{Message: "NOPE!"},
-	})
-	if err != nil {
-		return fmt.Errorf("EDS NACK failed: %s", err)
-	}
-
-	return nil
+func sendEDSNack(_ []string, node string, client ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
+	return sendXds(node, client, v3.EndpointType, "NOPE!")
 }
 
 // If pilot is reset, envoy will connect with a nonce/version info set on the previous
 // connection to pilot. In HA case this may be a different pilot. This is a regression test for
 // reconnect problems.
-func sendEDSReqReconnect(clusters []string, edsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient, res *xdsapi.DiscoveryResponse) error {
-	err := edsstr.Send(&xdsapi.DiscoveryRequest{
-		Node: &core.Node{
+func sendEDSReqReconnect(clusters []string, client ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient, res *xdsapi.DiscoveryResponse) error {
+	err := client.Send(&xdsapi.DiscoveryRequest{
+		Node: &corev2.Node{
 			Id:       sidecarID(app3Ip, "app3"),
 			Metadata: nodeMetadata,
 		},
-		TypeUrl:       v2.EndpointType,
+		TypeUrl:       v3.EndpointType,
 		ResponseNonce: res.Nonce,
 		VersionInfo:   res.VersionInfo,
 		ResourceNames: clusters})
@@ -198,12 +218,16 @@ func sendEDSReqReconnect(clusters []string, edsstr ads.AggregatedDiscoveryServic
 	return nil
 }
 
-func sendLDSReq(node string, ldsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
+func sendLDSReq(node string, client ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
+	return sendXds(node, client, v2.ListenerType, "")
+}
+
+func sendLDSReqWithLabels(node string, ldsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient, labels map[string]string) error {
 	err := ldsstr.Send(&xdsapi.DiscoveryRequest{
 		ResponseNonce: time.Now().String(),
-		Node: &core.Node{
+		Node: &corev2.Node{
 			Id:       node,
-			Metadata: nodeMetadata,
+			Metadata: model.NodeMetadata{Labels: labels}.ToStruct(),
 		},
 		TypeUrl: v2.ListenerType})
 	if err != nil {
@@ -213,26 +237,14 @@ func sendLDSReq(node string, ldsstr ads.AggregatedDiscoveryService_StreamAggrega
 	return nil
 }
 
-func sendLDSNack(node string, ldsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
-	err := ldsstr.Send(&xdsapi.DiscoveryRequest{
-		ResponseNonce: time.Now().String(),
-		Node: &core.Node{
-			Id:       node,
-			Metadata: nodeMetadata,
-		},
-		TypeUrl:     v2.ListenerType,
-		ErrorDetail: &rpc.Status{Message: "NOPE!"}})
-	if err != nil {
-		return fmt.Errorf("LDS NACK failed: %s", err)
-	}
-
-	return nil
+func sendLDSNack(node string, client ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
+	return sendXds(node, client, v2.ListenerType, "NOPE!")
 }
 
 func sendRDSReq(node string, routes []string, nonce string, rdsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
 	err := rdsstr.Send(&xdsapi.DiscoveryRequest{
 		ResponseNonce: nonce,
-		Node: &core.Node{
+		Node: &corev2.Node{
 			Id:       node,
 			Metadata: nodeMetadata,
 		},
@@ -248,12 +260,12 @@ func sendRDSReq(node string, routes []string, nonce string, rdsstr ads.Aggregate
 func sendRDSNack(node string, _ []string, nonce string, rdsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
 	err := rdsstr.Send(&xdsapi.DiscoveryRequest{
 		ResponseNonce: nonce,
-		Node: &core.Node{
+		Node: &corev2.Node{
 			Id:       node,
 			Metadata: nodeMetadata,
 		},
 		TypeUrl:     v2.RouteType,
-		ErrorDetail: &rpc.Status{Message: "NOPE!"}})
+		ErrorDetail: &status.Status{Message: "NOPE!"}})
 	if err != nil {
 		return fmt.Errorf("RDS NACK failed: %s", err)
 	}
@@ -261,32 +273,49 @@ func sendRDSNack(node string, _ []string, nonce string, rdsstr ads.AggregatedDis
 	return nil
 }
 
-func sendCDSReq(node string, edsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
-	err := edsstr.Send(&xdsapi.DiscoveryRequest{
+func sendCDSReq(node string, client ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
+	return sendXds(node, client, v2.ClusterType, "")
+}
+
+func sendCDSNack(node string, client ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
+	return sendXds(node, client, v2.ClusterType, "NOPE!")
+}
+
+func sendXds(node string, client ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient, typeURL string, errMsg string) error {
+	var errorDetail *status.Status
+	if errMsg != "" {
+		errorDetail = &status.Status{Message: errMsg}
+	}
+	err := client.Send(&xdsapi.DiscoveryRequest{
 		ResponseNonce: time.Now().String(),
-		Node: &core.Node{
+		Node: &corev2.Node{
 			Id:       node,
 			Metadata: nodeMetadata,
 		},
-		TypeUrl: v2.ClusterType})
+		ErrorDetail: errorDetail,
+		TypeUrl:     typeURL})
 	if err != nil {
-		return fmt.Errorf("CDS request failed: %s", err)
+		return fmt.Errorf("%v Request failed: %s", typeURL, err)
 	}
 
 	return nil
 }
 
-func sendCDSNack(node string, edsstr ads.AggregatedDiscoveryService_StreamAggregatedResourcesClient) error {
-	err := edsstr.Send(&xdsapi.DiscoveryRequest{
+func sendXdsV3(node string, client discovery.AggregatedDiscoveryService_StreamAggregatedResourcesClient, typeURL string, errMsg string) error {
+	var errorDetail *status.Status
+	if errMsg != "" {
+		errorDetail = &status.Status{Message: errMsg}
+	}
+	err := client.Send(&discovery.DiscoveryRequest{
 		ResponseNonce: time.Now().String(),
-		Node: &core.Node{
+		Node: &corev3.Node{
 			Id:       node,
 			Metadata: nodeMetadata,
 		},
-		ErrorDetail: &rpc.Status{Message: "NOPE!"},
-		TypeUrl:     v2.ClusterType})
+		ErrorDetail: errorDetail,
+		TypeUrl:     typeURL})
 	if err != nil {
-		return fmt.Errorf("CDS NACK failed: %s", err)
+		return fmt.Errorf("%v Request failed: %s", typeURL, err)
 	}
 
 	return nil

@@ -2,7 +2,7 @@ package cmd
 
 // AugmentedProtoTmpl defines the modified template proto with Type and InstanceParams
 // nolint:lll
-var augmentedProtoTmpl = `// Copyright 2017 Istio Authors
+var augmentedProtoTmpl = `// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@ option (istio.mixer.adapter.model.v1beta1.template_name) = "{{.TemplateName}}";
 option (gogoproto.goproto_getters_all) = false;
 option (gogoproto.equal_all) = false;
 option (gogoproto.gostring_all) = false;
+option (gogoproto.stable_marshaler_all) = true;
 
 // Handle{{.InterfaceName}}Service is implemented by backends that wants to handle request-time '{{.TemplateName}}' instances.
 service Handle{{.InterfaceName}}Service {

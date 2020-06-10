@@ -1,4 +1,4 @@
-// Copyright 2017 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -199,7 +199,7 @@ const reportAttributesOkPost = `
 `
 
 // Stats in Envoy proxy.
-var expectedStats = map[string]int{
+var expectedStats = map[string]uint64{
 	// Policy check stats
 	"http_mixer_filter.total_check_calls":             2,
 	"http_mixer_filter.total_check_cache_hits":        0,
