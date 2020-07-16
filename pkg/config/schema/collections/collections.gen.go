@@ -407,19 +407,19 @@ var (
 		}.MustBuild(),
 	}.MustBuild()
 
-	// K8SApiextensionsK8SIoV1Beta1Customresourcedefinitions describes the
-	// collection k8s/apiextensions.k8s.io/v1beta1/customresourcedefinitions
-	K8SApiextensionsK8SIoV1Beta1Customresourcedefinitions = collection.Builder{
-		Name:         "k8s/apiextensions.k8s.io/v1beta1/customresourcedefinitions",
-		VariableName: "K8SApiextensionsK8SIoV1Beta1Customresourcedefinitions",
+	// K8SApiextensionsK8SIoV1Customresourcedefinitions describes the
+	// collection k8s/apiextensions.k8s.io/v1/customresourcedefinitions
+	K8SApiextensionsK8SIoV1Customresourcedefinitions = collection.Builder{
+		Name:         "k8s/apiextensions.k8s.io/v1/customresourcedefinitions",
+		VariableName: "K8SApiextensionsK8SIoV1Customresourcedefinitions",
 		Disabled:     false,
 		Resource: resource.Builder{
 			Group:         "apiextensions.k8s.io",
 			Kind:          "CustomResourceDefinition",
 			Plural:        "CustomResourceDefinitions",
-			Version:       "v1beta1",
-			Proto:         "k8s.io.apiextensions_apiserver.pkg.apis.apiextensions.v1beta1.CustomResourceDefinition",
-			ProtoPackage:  "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1",
+			Version:       "v1",
+			Proto:         "k8s.io.apiextensions_apiserver.pkg.apis.apiextensions.v1.CustomResourceDefinition",
+			ProtoPackage:  "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1",
 			ClusterScoped: false,
 			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
@@ -946,12 +946,12 @@ var (
 		VariableName: "K8SServiceApisV1Alpha1Gatewayclasses",
 		Disabled:     false,
 		Resource: resource.Builder{
-			Group:         "networking.x.k8s.io",
+			Group:         "networking.x-k8s.io",
 			Kind:          "GatewayClass",
 			Plural:        "gatewayclasses",
 			Version:       "v1alpha1",
 			Proto:         "k8s.io.service_apis.api.v1alpha1.GatewayClassSpec",
-			ProtoPackage:  "sigs.k8s.io/service-apis/api/v1alpha1",
+			ProtoPackage:  "sigs.k8s.io/service-apis/apis/v1alpha1",
 			ClusterScoped: true,
 			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
@@ -964,14 +964,14 @@ var (
 		VariableName: "K8SServiceApisV1Alpha1Gateways",
 		Disabled:     false,
 		Resource: resource.Builder{
-			Group:         "networking.x.k8s.io",
+			Group:         "networking.x-k8s.io",
 			Kind:          "Gateway",
 			Plural:        "gateways",
 			Version:       "v1alpha1",
 			Proto:         "k8s.io.service_apis.api.v1alpha1.GatewaySpec",
-			ProtoPackage:  "sigs.k8s.io/service-apis/api/v1alpha1",
+			ProtoPackage:  "sigs.k8s.io/service-apis/apis/v1alpha1",
 			ClusterScoped: false,
-			ValidateProto: validation.ValidateGateway,
+			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
 	}.MustBuild()
 
@@ -982,12 +982,12 @@ var (
 		VariableName: "K8SServiceApisV1Alpha1Httproutes",
 		Disabled:     false,
 		Resource: resource.Builder{
-			Group:         "networking.x.k8s.io",
+			Group:         "networking.x-k8s.io",
 			Kind:          "HTTPRoute",
 			Plural:        "httproutes",
 			Version:       "v1alpha1",
 			Proto:         "k8s.io.service_apis.api.v1alpha1.HTTPRouteSpec",
-			ProtoPackage:  "sigs.k8s.io/service-apis/api/v1alpha1",
+			ProtoPackage:  "sigs.k8s.io/service-apis/apis/v1alpha1",
 			ClusterScoped: false,
 			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
@@ -1000,12 +1000,12 @@ var (
 		VariableName: "K8SServiceApisV1Alpha1Tcproutes",
 		Disabled:     false,
 		Resource: resource.Builder{
-			Group:         "networking.x.k8s.io",
+			Group:         "networking.x-k8s.io",
 			Kind:          "TcpRoute",
 			Plural:        "tcproutes",
 			Version:       "v1alpha1",
 			Proto:         "k8s.io.service_apis.api.v1alpha1.TcpRouteSpec",
-			ProtoPackage:  "sigs.k8s.io/service-apis/api/v1alpha1",
+			ProtoPackage:  "sigs.k8s.io/service-apis/apis/v1alpha1",
 			ClusterScoped: false,
 			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
@@ -1018,12 +1018,12 @@ var (
 		VariableName: "K8SServiceApisV1Alpha1Trafficsplits",
 		Disabled:     false,
 		Resource: resource.Builder{
-			Group:         "networking.x.k8s.io",
+			Group:         "networking.x-k8s.io",
 			Kind:          "TrafficSplit",
 			Plural:        "trafficsplits",
 			Version:       "v1alpha1",
 			Proto:         "k8s.io.service_apis.api.v1alpha1.TrafficSplitSpec",
-			ProtoPackage:  "sigs.k8s.io/service-apis/api/v1alpha1",
+			ProtoPackage:  "sigs.k8s.io/service-apis/apis/v1alpha1",
 			ClusterScoped: false,
 			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
@@ -1053,7 +1053,7 @@ var (
 		MustAdd(IstioSecurityV1Beta1Authorizationpolicies).
 		MustAdd(IstioSecurityV1Beta1Peerauthentications).
 		MustAdd(IstioSecurityV1Beta1Requestauthentications).
-		MustAdd(K8SApiextensionsK8SIoV1Beta1Customresourcedefinitions).
+		MustAdd(K8SApiextensionsK8SIoV1Customresourcedefinitions).
 		MustAdd(K8SAppsV1Deployments).
 		MustAdd(K8SConfigIstioIoV1Alpha2Adapters).
 		MustAdd(K8SConfigIstioIoV1Alpha2Attributemanifests).
@@ -1118,7 +1118,7 @@ var (
 
 	// Kube contains only kubernetes collections.
 	Kube = collection.NewSchemasBuilder().
-		MustAdd(K8SApiextensionsK8SIoV1Beta1Customresourcedefinitions).
+		MustAdd(K8SApiextensionsK8SIoV1Customresourcedefinitions).
 		MustAdd(K8SAppsV1Deployments).
 		MustAdd(K8SConfigIstioIoV1Alpha2Adapters).
 		MustAdd(K8SConfigIstioIoV1Alpha2Attributemanifests).

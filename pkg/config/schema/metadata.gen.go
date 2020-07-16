@@ -180,7 +180,7 @@ collections:
   ### K8s collections ###
 
   # Built-in K8s collections
-  - name: "k8s/apiextensions.k8s.io/v1beta1/customresourcedefinitions"
+  - name: "k8s/apiextensions.k8s.io/v1/customresourcedefinitions"
     kind: "CustomResourceDefinition"
     group: "apiextensions.k8s.io"
 
@@ -222,23 +222,23 @@ collections:
 
   - kind: "GatewayClass"
     name: "k8s/service_apis/v1alpha1/gatewayclasses"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
 
   - kind: "Gateway"
     name: "k8s/service_apis/v1alpha1/gateways"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
 
   - kind: "HTTPRoute"
     name: "k8s/service_apis/v1alpha1/httproutes"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
 
   - kind: "TcpRoute"
     name: "k8s/service_apis/v1alpha1/tcproutes"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
 
   - kind: "TrafficSplit"
     name: "k8s/service_apis/v1alpha1/trafficsplits"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
 
   # Istio CRD collections
 
@@ -364,7 +364,8 @@ snapshots:
       - "istio/networking/v1alpha3/serviceentries"
       - "istio/networking/v1alpha3/sidecars"
       - "istio/networking/v1alpha3/virtualservices"
-      - "k8s/apiextensions.k8s.io/v1beta1/customresourcedefinitions"
+      - "istio/security/v1beta1/authorizationpolicies"
+      - "k8s/apiextensions.k8s.io/v1/customresourcedefinitions"
       - "k8s/apps/v1/deployments"
       - "k8s/core/v1/namespaces"
       - "k8s/core/v1/pods"
@@ -378,9 +379,9 @@ resources:
   - kind: "CustomResourceDefinition"
     plural: "CustomResourceDefinitions"
     group: "apiextensions.k8s.io"
-    version: "v1beta1"
-    proto: "k8s.io.apiextensions_apiserver.pkg.apis.apiextensions.v1beta1.CustomResourceDefinition"
-    protoPackage: "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+    version: "v1"
+    proto: "k8s.io.apiextensions_apiserver.pkg.apis.apiextensions.v1.CustomResourceDefinition"
+    protoPackage: "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
   - kind: "Deployment"
     plural: "Deployments"
@@ -442,38 +443,39 @@ resources:
 
   - Kind: "GatewayClass"
     plural: "gatewayclasses"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
     version: "v1alpha1"
     clusterScoped: true
-    protoPackage: "sigs.k8s.io/service-apis/api/v1alpha1"
+    protoPackage: "sigs.k8s.io/service-apis/apis/v1alpha1"
     proto: "k8s.io.service_apis.api.v1alpha1.GatewayClassSpec"
 
   - Kind: "Gateway"
     plural: "gateways"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
     version: "v1alpha1"
-    protoPackage: "sigs.k8s.io/service-apis/api/v1alpha1"
+    protoPackage: "sigs.k8s.io/service-apis/apis/v1alpha1"
     proto: "k8s.io.service_apis.api.v1alpha1.GatewaySpec"
+    validate: "EmptyValidate"
 
   - Kind: "HTTPRoute"
     plural: "httproutes"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
     version: "v1alpha1"
-    protoPackage: "sigs.k8s.io/service-apis/api/v1alpha1"
+    protoPackage: "sigs.k8s.io/service-apis/apis/v1alpha1"
     proto: "k8s.io.service_apis.api.v1alpha1.HTTPRouteSpec"
 
   - Kind: "TcpRoute"
     plural: "tcproutes"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
     version: "v1alpha1"
-    protoPackage: "sigs.k8s.io/service-apis/api/v1alpha1"
+    protoPackage: "sigs.k8s.io/service-apis/apis/v1alpha1"
     proto: "k8s.io.service_apis.api.v1alpha1.TcpRouteSpec"
 
   - Kind: "TrafficSplit"
     plural: "trafficsplits"
-    group: "networking.x.k8s.io"
+    group: "networking.x-k8s.io"
     version: "v1alpha1"
-    protoPackage: "sigs.k8s.io/service-apis/api/v1alpha1"
+    protoPackage: "sigs.k8s.io/service-apis/apis/v1alpha1"
     proto: "k8s.io.service_apis.api.v1alpha1.TrafficSplitSpec"
 
   ## Istio resources
@@ -652,7 +654,7 @@ resources:
 transforms:
   - type: direct
     mapping:
-      "k8s/apiextensions.k8s.io/v1beta1/customresourcedefinitions": "k8s/apiextensions.k8s.io/v1beta1/customresourcedefinitions"
+      "k8s/apiextensions.k8s.io/v1/customresourcedefinitions": "k8s/apiextensions.k8s.io/v1/customresourcedefinitions"
       "k8s/config.istio.io/v1alpha2/adapters": "istio/config/v1alpha2/adapters"
       "k8s/config.istio.io/v1alpha2/attributemanifests": "istio/policy/v1beta1/attributemanifests"
       "k8s/config.istio.io/v1alpha2/handlers": "istio/policy/v1beta1/handlers"

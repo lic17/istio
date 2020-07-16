@@ -27,8 +27,6 @@ global:
 
   policyNamespace: istio-system
 
-  configRootNamespace: istio-system
-
   ## End new settings
   ## After this line we have the old Istio settings.
 
@@ -97,7 +95,7 @@ global:
     # The number of successive failed probes before indicating readiness failure.
     readinessFailureThreshold: 30
 
-    # istio egress capture whitelist
+    # istio egress capture allowlist
     # https://istio.io/docs/tasks/traffic-management/egress.html#calling-external-services-directly
     # example: includeIPRanges: "172.30.0.0/16,172.20.0.0/16"
     # would only capture egress traffic on those two IP Ranges, all other outbound traffic would
@@ -106,7 +104,7 @@ global:
     excludeIPRanges: ""
     excludeOutboundPorts: ""
 
-    # istio ingress capture whitelist
+    # istio ingress capture allowlist
     # examples:
     #     Redirect only selected ports:            --includeInboundPorts="80,8080"
     excludeInboundPorts: ""
@@ -123,8 +121,8 @@ global:
     image: proxyv2
     resources:
       limits:
-        cpu: 100m
-        memory: 50Mi
+        cpu: 2000m
+        memory: 1024Mi
       requests:
         cpu: 10m
         memory: 10Mi
@@ -400,11 +398,11 @@ meshConfig:
   defaultConfig:
     proxyMetadata: {}
     tracing:
-      tlsSettings:
-        mode: DISABLE # DISABLE, SIMPLE, MUTUAL, ISTIO_MUTUAL
-        clientCertificate: # example: /etc/istio/tracer/cert-chain.pem
-        privateKey:        # example: /etc/istio/tracer/key.pem
-        caCertificates:    # example: /etc/istio/tracer/root-cert.pem
-        sni:               # example: tracer.somedomain
-        subjectAltNames: []
+#      tlsSettings:
+#        mode: DISABLE # DISABLE, SIMPLE, MUTUAL, ISTIO_MUTUAL
+#        clientCertificate: # example: /etc/istio/tracer/cert-chain.pem
+#        privateKey:        # example: /etc/istio/tracer/key.pem
+#        caCertificates:    # example: /etc/istio/tracer/root-cert.pem
+#        sni:               # example: tracer.somedomain
+#        subjectAltNames: []
         # - tracer.somedomain

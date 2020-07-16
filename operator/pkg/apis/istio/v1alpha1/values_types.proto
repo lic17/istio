@@ -1,4 +1,4 @@
-// Copyright 2019 Istio Authors
+// Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,16 @@ syntax = 'proto3';
 
 import "google/protobuf/duration.proto";
 import "github.com/gogo/protobuf/protobuf/google/protobuf/wrappers.proto";
+import "gogoproto/gogo.proto";
 
 package v1alpha1;
 
 // Package-wide variables from generator "generated".
 option go_package = "v1alpha1";
+
+option (gogoproto.marshaler_all) = false;
+option (gogoproto.unmarshaler_all) = false;
+option (gogoproto.sizer_all) = false;
 
 // ArchConfig specifies the pod scheduling target architecture(amd64, ppc64le, s390x) for all the Istio control plane components.
 message ArchConfig {
@@ -146,6 +151,20 @@ message CoreDNSConfig {
   TypeSliceOfMapStringInterface podAntiAffinityTermLabelSelector = 12 [deprecated=true];
 
   TypeSliceOfMapStringInterface tolerations = 13 [deprecated=true];
+
+  // Controls whether auto scaling with a HorizontalPodAutoscaler is enabled.
+  google.protobuf.BoolValue autoscaleEnabled = 14;
+
+  // maxReplicas setting for HorizontalPodAutoscaler.
+  uint32 autoscaleMax = 15;
+
+  // minReplicas setting for HorizontalPodAutoscaler.
+  uint32 autoscaleMin = 16;
+
+  // K8s utilization setting for HorizontalPodAutoscaler target.
+  //
+  // See https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+  CPUTargetUtilizationConfig cpu = 17 [deprecated=true];
 }
 
 // DefaultPodDisruptionBudgetConfig specifies the default pod disruption budget configuration.
@@ -1062,7 +1081,7 @@ message PilotConfig {
 
   string jwksResolverExtraRootCA = 32;
 
-  TypeSliceOfMapStringInterface plugins = 33;
+  TypeSliceString plugins = 33;
 
   string hub = 34;
 
@@ -1856,6 +1875,9 @@ message TypeSliceOfMapStringInterface {}
 
 // GOTYPE: *IntOrStringForPB
 message TypeIntOrStringForPB {}
+
+// GOTYPE: []string
+message TypeSliceString {}
 
 // ZeroVPNConfig enables cross-cluster access using SNI matching.
 message ZeroVPNConfig {

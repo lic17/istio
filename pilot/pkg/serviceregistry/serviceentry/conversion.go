@@ -20,13 +20,13 @@ import (
 
 	"istio.io/api/label"
 	networking "istio.io/api/networking/v1alpha3"
-	"istio.io/istio/pkg/config/schema/collections"
 
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/serviceregistry"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/host"
 	"istio.io/istio/pkg/config/protocol"
+	"istio.io/istio/pkg/config/schema/gvk"
 	"istio.io/istio/pkg/config/visibility"
 	"istio.io/istio/pkg/spiffe"
 )
@@ -47,7 +47,7 @@ func convertPort(port *networking.Port) *model.Port {
 // See convertServices() for the reverse conversion, used by Istio to handle ServiceEntry configs.
 // See kube.ConvertService for the conversion from K8S to internal Service.
 func ServiceToServiceEntry(svc *model.Service) *model.Config {
-	gvk := collections.IstioNetworkingV1Alpha3Serviceentries.Resource().GroupVersionKind()
+	gvk := gvk.ServiceEntry
 	se := &networking.ServiceEntry{
 		// Host is fully qualified: name, namespace, domainSuffix
 		Hosts: []string{string(svc.Hostname)},
@@ -111,15 +111,9 @@ func ServiceToServiceEntry(svc *model.Service) *model.Config {
 
 	cfg := &model.Config{
 		ConfigMeta: model.ConfigMeta{
-			Type:      gvk.Kind,
-			Group:     gvk.Group,
-			Version:   gvk.Version,
-			Name:      "synthetic-" + svc.Attributes.Name,
-			Namespace: svc.Attributes.Namespace,
-			//Domain:            "",
-			//Labels:            nil,
-			//Annotations:       nil,
-			//ResourceVersion:   "",
+			GroupVersionKind:  gvk,
+			Name:              "synthetic-" + svc.Attributes.Name,
+			Namespace:         svc.Attributes.Namespace,
 			CreationTimestamp: svc.CreationTime,
 		},
 		Spec: se,
@@ -343,12 +337,12 @@ func getTLSModeFromWorkloadEntry(wle *networking.WorkloadEntry) string {
 // TODO(rshriram): we currently ignore the pod(endpoint) ports and setup 1-1 mapping
 // from service port to endpoint port. Need to figure out a way to map k8s pod port to
 // appropriate service entry port
-func convertForeignServiceInstances(foreignInstance *model.ServiceInstance, serviceEntryServices []*model.Service,
+func convertForeignServiceInstances(foreignInstance *model.IstioEndpoint, serviceEntryServices []*model.Service,
 	serviceEntry *networking.ServiceEntry) []*model.ServiceInstance {
 	out := make([]*model.ServiceInstance, 0)
 	for _, service := range serviceEntryServices {
 		for _, serviceEntryPort := range serviceEntry.Ports {
-			ep := *foreignInstance.Endpoint
+			ep := *foreignInstance
 			ep.ServicePortName = serviceEntryPort.Name
 			ep.EndpointPort = serviceEntryPort.Number
 			ep.EnvoyEndpoint = nil
@@ -367,8 +361,8 @@ func convertForeignServiceInstances(foreignInstance *model.ServiceInstance, serv
 // TODO(rshriram): we currently ignore the workload entry (endpoint) ports. K8S will setup 1-1 mapping
 // from service port to endpoint port. Need to figure out a way to map workload entry port to
 // appropriate k8s service port
-func convertWorkloadEntryToServiceInstanceForK8S(namespace string,
-	we *networking.WorkloadEntry) *model.ServiceInstance {
+func convertWorkloadEntryToForeignInstances(namespace string,
+	we *networking.WorkloadEntry) *model.WorkloadInstance {
 	addr := we.GetAddress()
 	if strings.HasPrefix(addr, model.UnixAddressPrefix) {
 		// k8s can't use uds for service objects
@@ -379,7 +373,7 @@ func convertWorkloadEntryToServiceInstanceForK8S(namespace string,
 	if we.ServiceAccount != "" {
 		sa = spiffe.MustGenSpiffeURI(namespace, we.ServiceAccount)
 	}
-	return &model.ServiceInstance{
+	return &model.WorkloadInstance{
 		Endpoint: &model.IstioEndpoint{
 			Address: addr,
 			Network: we.Network,
@@ -391,10 +385,7 @@ func convertWorkloadEntryToServiceInstanceForK8S(namespace string,
 			TLSMode:        tlsMode,
 			ServiceAccount: sa,
 		},
-		Service: &model.Service{
-			Attributes: model.ServiceAttributes{
-				Namespace: namespace,
-			},
-		},
+		PortMap:   we.Ports,
+		Namespace: namespace,
 	}
 }
