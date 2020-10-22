@@ -1,3 +1,4 @@
+// +build integ
 // Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,15 +22,15 @@ import (
 
 	"istio.io/istio/pkg/test/framework"
 	"istio.io/istio/pkg/test/framework/components/bookinfo"
-	"istio.io/istio/pkg/test/framework/components/ingress"
 	"istio.io/istio/pkg/test/framework/components/istio"
+	"istio.io/istio/pkg/test/framework/components/istio/ingress"
 	"istio.io/istio/pkg/test/framework/components/namespace"
 	"istio.io/istio/pkg/test/framework/components/prometheus"
 	"istio.io/istio/pkg/test/framework/label"
 	"istio.io/istio/pkg/test/framework/resource"
 	"istio.io/istio/pkg/test/util/file"
 	"istio.io/istio/pkg/test/util/retry"
-	util "istio.io/istio/tests/integration/mixer"
+	util "istio.io/istio/tests/integration/telemetry"
 	util_prometheus "istio.io/istio/tests/integration/telemetry/stats/prometheus"
 )
 
@@ -63,7 +64,7 @@ func TestTcpMetric(t *testing.T) { // nolint:interfacer
 				bookinfo.NetworkingTCPDbRule.LoadWithNamespaceOrFail(t, bookinfoNs.Name()),
 			)
 
-			systemNM := namespace.ClaimSystemNamespaceOrFail(ctx, ctx)
+			systemNM := istio.ClaimSystemNamespaceOrFail(ctx, ctx)
 			cleanup, err := file.AsString(cleanupFilterConfig)
 			if err != nil {
 				t.Errorf("unable to load config %s, err:%v", cleanupFilterConfig, err)
@@ -97,7 +98,6 @@ func TestTcpMetric(t *testing.T) { // nolint:interfacer
 func TestMain(m *testing.M) {
 	framework.
 		NewSuite(m).
-		RequireSingleCluster().
 		Label(label.CustomSetup).
 		Setup(istio.Setup(&ist, nil)).
 		Setup(testsetup).
@@ -121,10 +121,7 @@ func testsetup(ctx resource.Context) (err error) {
 	if _, err = bookinfo.Deploy(ctx, bookinfo.Config{Namespace: bookinfoNs, Cfg: bookinfo.BookinfoDB}); err != nil {
 		return err
 	}
-	ing, err = ingress.New(ctx, ingress.Config{Istio: ist})
-	if err != nil {
-		return err
-	}
+	ing = ist.IngressFor(ctx.Clusters().Default())
 	prom, err = prometheus.New(ctx, prometheus.Config{})
 	if err != nil {
 		return err

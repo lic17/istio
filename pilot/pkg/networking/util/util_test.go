@@ -24,20 +24,21 @@ import (
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	http_conn "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	xdsutil "github.com/envoyproxy/go-control-plane/pkg/wellknown"
-	"github.com/google/go-cmp/cmp"
-	"google.golang.org/protobuf/testing/protocmp"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	"github.com/golang/protobuf/ptypes/wrappers"
+	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/testing/protocmp"
 	"gopkg.in/d4l3k/messagediff.v1"
 
 	networking "istio.io/api/networking/v1alpha3"
-
+	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/serviceregistry"
+	"istio.io/istio/pkg/config"
+	"istio.io/istio/pkg/config/labels"
 	"istio.io/istio/pkg/config/schema/collections"
 	proto2 "istio.io/istio/pkg/proto"
 )
@@ -350,12 +351,12 @@ func TestIsLocalityEmpty(t *testing.T) {
 func TestBuildConfigInfoMetadata(t *testing.T) {
 	cases := []struct {
 		name string
-		in   model.ConfigMeta
+		in   config.Meta
 		want *core.Metadata
 	}{
 		{
 			"destination-rule",
-			model.ConfigMeta{
+			config.Meta{
 				Name:             "svcA",
 				Namespace:        "default",
 				Domain:           "svc.cluster.local",
@@ -382,6 +383,145 @@ func TestBuildConfigInfoMetadata(t *testing.T) {
 			got := BuildConfigInfoMetadata(v.in)
 			if diff, equal := messagediff.PrettyDiff(got, v.want); !equal {
 				tt.Errorf("BuildConfigInfoMetadata(%v) produced incorrect result:\ngot: %v\nwant: %v\nDiff: %s", v.in, got, v.want, diff)
+			}
+		})
+	}
+}
+
+func TestAddConfigInfoMetadata(t *testing.T) {
+	cases := []struct {
+		name string
+		in   config.Meta
+		meta *core.Metadata
+		want *core.Metadata
+	}{
+		{
+			"nil metadata",
+			config.Meta{
+				Name:             "svcA",
+				Namespace:        "default",
+				Domain:           "svc.cluster.local",
+				GroupVersionKind: collections.IstioNetworkingV1Alpha3Destinationrules.Resource().GroupVersionKind(),
+			},
+			nil,
+			nil,
+		},
+		{
+			"empty metadata",
+			config.Meta{
+				Name:             "svcA",
+				Namespace:        "default",
+				Domain:           "svc.cluster.local",
+				GroupVersionKind: collections.IstioNetworkingV1Alpha3Destinationrules.Resource().GroupVersionKind(),
+			},
+			&core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{},
+			},
+			&core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					IstioMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							"config": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "/apis/networking.istio.io/v1alpha3/namespaces/default/destination-rule/svcA",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			"existing istio metadata",
+			config.Meta{
+				Name:             "svcA",
+				Namespace:        "default",
+				Domain:           "svc.cluster.local",
+				GroupVersionKind: collections.IstioNetworkingV1Alpha3Destinationrules.Resource().GroupVersionKind(),
+			},
+			&core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					IstioMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							"other-config": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "other-config",
+								},
+							},
+						},
+					},
+				},
+			},
+			&core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					IstioMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							"other-config": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "other-config",
+								},
+							},
+							"config": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "/apis/networking.istio.io/v1alpha3/namespaces/default/destination-rule/svcA",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			"existing non-istio metadata",
+			config.Meta{
+				Name:             "svcA",
+				Namespace:        "default",
+				Domain:           "svc.cluster.local",
+				GroupVersionKind: collections.IstioNetworkingV1Alpha3Destinationrules.Resource().GroupVersionKind(),
+			},
+			&core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					"other-metadata": {
+						Fields: map[string]*structpb.Value{
+							"other-config": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "other-config",
+								},
+							},
+						},
+					},
+				},
+			},
+			&core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					"other-metadata": {
+						Fields: map[string]*structpb.Value{
+							"other-config": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "other-config",
+								},
+							},
+						},
+					},
+					IstioMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							"config": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "/apis/networking.istio.io/v1alpha3/namespaces/default/destination-rule/svcA",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, v := range cases {
+		t.Run(v.name, func(tt *testing.T) {
+			AddConfigInfoMetadata(v.meta, v.in)
+			if diff, equal := messagediff.PrettyDiff(v.meta, v.want); !equal {
+				tt.Errorf("AddConfigInfoMetadata(%v) produced incorrect result:\ngot: %v\nwant: %v\nDiff: %s", v.in, v.meta, v.want, diff)
 			}
 		})
 	}
@@ -629,19 +769,6 @@ func TestBuildStatPrefix(t *testing.T) {
 				Namespace:       "namespace1",
 			},
 			"reviews.namespace1.7443",
-		},
-		{
-			"Service from non k8s registry",
-			"%SERVICE%.%SERVICE_PORT%",
-			"reviews.hostname.consul",
-			"",
-			&model.Port{Name: "grpc-svc", Port: 7443, Protocol: "GRPC"},
-			model.ServiceAttributes{
-				ServiceRegistry: string(serviceregistry.Consul),
-				Name:            "foo",
-				Namespace:       "bar",
-			},
-			"reviews.hostname.consul.7443",
 		},
 		{
 			"Service FQDN only pattern",
@@ -962,6 +1089,153 @@ func TestCidrRangeSliceEqual(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := CidrRangeSliceEqual(tt.first, tt.second); got != tt.want {
 				t.Errorf("Unexpected CidrRangeSliceEqual() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEndpointMetadata(t *testing.T) {
+	features.EndpointTelemetryLabel = true
+	cases := []struct {
+		name         string
+		network      string
+		tlsMode      string
+		workloadName string
+		namespace    string
+		labels       labels.Instance
+		want         *core.Metadata
+	}{
+		{
+			name:         "all empty",
+			tlsMode:      string(model.DisabledTLSModeLabel),
+			network:      "",
+			workloadName: "",
+			want:         nil,
+		},
+		{
+			name:         "tls mode",
+			tlsMode:      string(model.IstioMutualTLSModeLabel),
+			network:      "",
+			workloadName: "",
+			want: &core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					EnvoyTransportSocketMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							model.TLSModeLabelShortname: {
+								Kind: &structpb.Value_StringValue{
+									StringValue: string(model.IstioMutualTLSModeLabel),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:         "network and tls mode",
+			tlsMode:      string(model.IstioMutualTLSModeLabel),
+			network:      "network",
+			workloadName: "",
+			want: &core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					EnvoyTransportSocketMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							model.TLSModeLabelShortname: {
+								Kind: &structpb.Value_StringValue{
+									StringValue: string(model.IstioMutualTLSModeLabel),
+								},
+							},
+						},
+					},
+					IstioMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							"network": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "network",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:         "all label",
+			tlsMode:      string(model.IstioMutualTLSModeLabel),
+			network:      "network",
+			workloadName: "workload",
+			namespace:    "default",
+			labels: labels.Instance{
+				model.IstioCanonicalServiceLabelName:         "service",
+				model.IstioCanonicalServiceRevisionLabelName: "v1",
+			},
+			want: &core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					EnvoyTransportSocketMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							model.TLSModeLabelShortname: {
+								Kind: &structpb.Value_StringValue{
+									StringValue: string(model.IstioMutualTLSModeLabel),
+								},
+							},
+						},
+					},
+					IstioMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							"network": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "network",
+								},
+							},
+							"workload": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "workload;default;service;v1",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:         "miss pod label",
+			tlsMode:      string(model.IstioMutualTLSModeLabel),
+			network:      "network",
+			workloadName: "workload",
+			namespace:    "default",
+			want: &core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					EnvoyTransportSocketMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							model.TLSModeLabelShortname: {
+								Kind: &structpb.Value_StringValue{
+									StringValue: string(model.IstioMutualTLSModeLabel),
+								},
+							},
+						},
+					},
+					IstioMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							"network": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "network",
+								},
+							},
+							"workload": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "workload;default;;",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := BuildLbEndpointMetadata(tt.network, tt.tlsMode, tt.workloadName, tt.namespace, tt.labels); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Unexpected Endpoint metadata got %v, want %v", got, tt.want)
 			}
 		})
 	}

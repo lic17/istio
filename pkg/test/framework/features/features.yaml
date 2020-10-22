@@ -18,6 +18,7 @@ features:
   # features that relate to measuring or exploring your service mesh or the services which comprise it.
   observability:
     telemetry:
+      stackdriver:
       stats:
         prometheus:
           customize-metric:
@@ -34,6 +35,7 @@ features:
       istioctl:
   # features relating to controlling the traffic of the service mesh.
   traffic:
+    locality:
     reachability:
     shifting:
     routing:
@@ -41,33 +43,87 @@ features:
     mirroring:
     ingress:
       loadbalancing:
+    ratelimit:
+      envoy:
   usability:
     observability:
+      describe:
+      version:
+      wait:
       status:
+      proxy-config:
+      proxy-status:
+      authz-check:
+      analysis:
+        line-numbers:
+    helpers:
+      add-to-mesh:
+      remove-from-mesh:
   # features that allow users to secure their services and service mesh.
   security:
     peer:
       secure-naming:
+      trust-domain-validation:
     user:
     ingress:
       mtls:
+        secretrotation:
+        generic-compoundrotation:
+        nongeneric-compoundrotation:
+        gateway:
       tls:
+        secretrotation:
+        gateway:
+          invalid-secret:
+          K8sca:
+          valid-secret:
     egress:
       mtls:
+        sds:
       tls:
         filebased:
+        sds:
+    authorization:
+      mtls-local:
+      jwt-token:
+      workload-selector:
+      deny-action:
+      negative-match:
+      ingress-gateway:
+      egress-gateway:
+      tcp:
+      conditions:
+      grpc-protocol:
+      path-normalization:
+    authentication:
+      jwt:
+      ingressjwt:
+    reachability:
+    healthcheck:
+    filterchain:
     control-plane:
       k8s-certs:
+        dns-certificate:
+        k8sca:
+        jwt:
+        webhook:
       plugin-cert:
   # features which allow extending or deep integrations with istio and other products
   extensibility:
   # features releated to the lifecycle of istio installations
   installation:
+    istioctl:
+      uninstall_revision:
+      uninstall_manifest:
+      uninstall_purge:
     multicluster:
       central-istiod:
       multimaster:
       remote:
+      centralremotekubeconfig:
   # describes internal build and testing infrastrcuture
   infrastructure:
     # the testing framework
     framework:
+  vm:
+    autoregistration:

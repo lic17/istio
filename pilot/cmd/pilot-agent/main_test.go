@@ -20,65 +20,16 @@ import (
 	"github.com/onsi/gomega"
 
 	"istio.io/istio/pilot/pkg/model"
-	"istio.io/istio/pilot/pkg/security/authn/utils"
-	"istio.io/istio/pilot/pkg/serviceregistry"
 )
 
 func TestPilotDefaultDomainKubernetes(t *testing.T) {
-	g := gomega.NewGomegaWithT(t)
+	g := gomega.NewWithT(t)
 	role = &model.Proxy{}
 	role.DNSDomain = ""
-	registryID = serviceregistry.Kubernetes
 
 	domain := getDNSDomain("default", role.DNSDomain)
 
 	g.Expect(domain).To(gomega.Equal("default.svc.cluster.local"))
-}
-
-func TestPilotDefaultDomainConsul(t *testing.T) {
-	g := gomega.NewGomegaWithT(t)
-	role := &model.Proxy{}
-	role.DNSDomain = ""
-	registryID = serviceregistry.Consul
-
-	domain := getDNSDomain("", role.DNSDomain)
-
-	g.Expect(domain).To(gomega.Equal("service.consul"))
-}
-
-func TestPilotDefaultDomainOthers(t *testing.T) {
-	g := gomega.NewGomegaWithT(t)
-	role = &model.Proxy{}
-	role.DNSDomain = ""
-	registryID = serviceregistry.Mock
-
-	domain := getDNSDomain("", role.DNSDomain)
-
-	g.Expect(domain).To(gomega.Equal(""))
-}
-
-func TestPilotDomain(t *testing.T) {
-	g := gomega.NewGomegaWithT(t)
-	role.DNSDomain = "my.domain"
-	registryID = serviceregistry.Mock
-
-	domain := getDNSDomain("", role.DNSDomain)
-
-	g.Expect(domain).To(gomega.Equal("my.domain"))
-}
-
-func TestCustomMixerSanIfAuthenticationMutualDomainKubernetes(t *testing.T) {
-	g := gomega.NewGomegaWithT(t)
-	role = &model.Proxy{}
-	role.DNSDomain = ""
-	trustDomain = "mesh.com"
-	mixerIdentity = "mixer-identity"
-	registryID = serviceregistry.Kubernetes
-
-	setSpiffeTrustDomain("", role.DNSDomain)
-	mixerSAN := utils.GetSAN("", mixerIdentity)
-
-	g.Expect(mixerSAN).To(gomega.Equal("spiffe://mesh.com/mixer-identity"))
 }
 
 func TestIsIPv6Proxy(t *testing.T) {

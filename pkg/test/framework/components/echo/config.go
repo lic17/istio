@@ -29,6 +29,9 @@ type Config struct {
 	// Namespace of the echo Instance. If not provided, a default namespace "apps" is used.
 	Namespace namespace.Instance
 
+	// DefaultHostHeader overrides the default Host header for calls (`service.namespace.svc.cluster.local`)
+	DefaultHostHeader string
+
 	// Domain of the echo Instance. If not provided, a default will be selected.
 	Domain string
 
@@ -59,10 +62,6 @@ type Config struct {
 	// ServiceAnnotations is annotations on service object.
 	ServiceAnnotations Annotations
 
-	// IncludeInboundPorts provides the ports that inbound listener should capture
-	// "*" means capture all.
-	IncludeInboundPorts string
-
 	// ReadinessTimeout specifies the timeout that we wait the application to
 	// become ready.
 	ReadinessTimeout time.Duration
@@ -81,8 +80,14 @@ type Config struct {
 	// disable sidecar injection, etc.
 	DeployAsVM bool
 
+	// If enabled, ISTIO_META_AUTO_REGISTER will be set on the VM and the WorkloadEntry will be created automatically.
+	AutoRegisterVM bool
+
 	// The image name to be used to pull the image for the VM. `DeployAsVM` must be enabled.
 	VMImage string
+
+	// The set of environment variables to set for `DeployAsVM` instances.
+	VMEnvironment map[string]string
 }
 
 // SubsetConfig is the config for a group of Subsets (e.g. Kubernetes deployment).
@@ -99,6 +104,16 @@ func (c Config) String() string {
 	return fmt.Sprint("{service: ", c.Service, ", version: ", c.Version, "}")
 }
 
+// PortByName looks up a given port by name
+func (c Config) PortByName(name string) *Port {
+	for _, p := range c.Ports {
+		if p.Name == name {
+			return &p
+		}
+	}
+	return nil
+}
+
 // FQDN returns the fully qualified domain name for the service.
 func (c Config) FQDN() string {
 	out := c.Service
@@ -109,4 +124,12 @@ func (c Config) FQDN() string {
 		out += "." + c.Domain
 	}
 	return out
+}
+
+// HostHeader returns the Host header that will be used for calls to this service.
+func (c Config) HostHeader() string {
+	if c.DefaultHostHeader != "" {
+		return c.DefaultHostHeader
+	}
+	return c.FQDN()
 }

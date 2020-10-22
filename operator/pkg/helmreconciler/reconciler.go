@@ -24,6 +24,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -32,6 +33,7 @@ import (
 	"istio.io/api/label"
 	"istio.io/api/operator/v1alpha1"
 	valuesv1alpha1 "istio.io/istio/operator/pkg/apis/istio/v1alpha1"
+	"istio.io/istio/operator/pkg/metrics"
 	"istio.io/istio/operator/pkg/name"
 	"istio.io/istio/operator/pkg/object"
 	"istio.io/istio/operator/pkg/util"
@@ -52,6 +54,10 @@ type HelmReconciler struct {
 	// dependencyWaitCh is a map of signaling channels. A parent with children ch1...chN will signal
 	// dependencyWaitCh[ch1]...dependencyWaitCh[chN] when it's completely installed.
 	dependencyWaitCh map[name.ComponentName]chan struct{}
+
+	// The fields below are for metrics and reporting
+	countLock     *sync.Mutex
+	prunedKindSet map[schema.GroupKind]struct{}
 }
 
 // Options are options for HelmReconciler.
@@ -101,6 +107,9 @@ func NewHelmReconciler(client client.Client, restConfig *rest.Config, iop *value
 		iop = &valuesv1alpha1.IstioOperator{}
 		iop.Spec = &v1alpha1.IstioOperatorSpec{}
 	}
+	if operatorRevision, found := os.LookupEnv("REVISION"); found {
+		iop.Spec.Revision = operatorRevision
+	}
 	var cs *kubernetes.Clientset
 	var err error
 	if restConfig != nil {
@@ -116,6 +125,8 @@ func NewHelmReconciler(client client.Client, restConfig *rest.Config, iop *value
 		iop:              iop,
 		opts:             opts,
 		dependencyWaitCh: initDependencies(),
+		countLock:        &sync.Mutex{},
+		prunedKindSet:    make(map[schema.GroupKind]struct{}),
 	}, nil
 }
 
@@ -141,6 +152,7 @@ func (h *HelmReconciler) Reconcile() (*v1alpha1.InstallStatus, error) {
 
 	h.opts.ProgressLog.SetState(progress.StatePruning)
 	pruneErr := h.Prune(manifestMap, false)
+	h.reportPrunedObjectKind()
 	return status, pruneErr
 }
 
@@ -201,6 +213,8 @@ func (h *HelmReconciler) processRecursive(manifests name.ManifestMap) *v1alpha1.
 	}
 	wg.Wait()
 
+	metrics.ReportOwnedResourceCounts()
+
 	out := &v1alpha1.InstallStatus{
 		Status:          overallStatus(componentStatus),
 		ComponentStatus: componentStatus,
@@ -211,7 +225,27 @@ func (h *HelmReconciler) processRecursive(manifests name.ManifestMap) *v1alpha1.
 
 // Delete resources associated with the custom resource instance
 func (h *HelmReconciler) Delete() error {
-	return h.Prune(nil, true)
+	defer func() {
+		metrics.ReportOwnedResourceCounts()
+		h.reportPrunedObjectKind()
+	}()
+	iop := h.iop
+	if iop.Spec.Revision == "" {
+		err := h.Prune(nil, true)
+		return err
+	}
+	// Delete IOP with revision:
+	// for this case we update the status field to pending if there are still proxies pointing to this revision
+	// and we do not prune shared resources, same effect as `istioctl uninstall --revision foo` command.
+	status, err := h.PruneControlPlaneByRevisionWithController(iop.Spec.Namespace, iop.Spec.Revision)
+	if err != nil {
+		return err
+	}
+
+	if err := h.SetStatusComplete(status); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DeleteAll deletes all Istio resources in the cluster.
@@ -320,8 +354,12 @@ func (h *HelmReconciler) getCoreOwnerLabels() (map[string]string, error) {
 	labels := make(map[string]string)
 
 	labels[operatorLabelStr] = operatorReconcileStr
-	labels[OwningResourceName] = crName
-	labels[OwningResourceNamespace] = crNamespace
+	if crName != "" {
+		labels[OwningResourceName] = crName
+	}
+	if crNamespace != "" {
+		labels[OwningResourceNamespace] = crNamespace
+	}
 	labels[istioVersionLabelStr] = version.Info.Version
 
 	return labels, nil
@@ -336,14 +374,10 @@ func (h *HelmReconciler) addComponentLabels(coreLabels map[string]string, compon
 	if h.iop != nil {
 		revision = h.iop.Spec.Revision
 	}
-
-	// Only pilot component uses revisions
-	if componentName == string(name.PilotComponentName) {
-		if revision == "" {
-			revision = "default"
-		}
-		labels[label.IstioRev] = revision
+	if revision == "" {
+		revision = "default"
 	}
+	labels[label.IstioRev] = revision
 
 	labels[IstioComponentLabelStr] = componentName
 
@@ -398,7 +432,11 @@ func (h *HelmReconciler) getCRHash(componentName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.Join([]string{crName, crNamespace, componentName, h.restConfig.Host}, "-"), nil
+	var host string
+	if h.restConfig != nil {
+		host = h.restConfig.Host
+	}
+	return strings.Join([]string{crName, crNamespace, componentName, host}, "-"), nil
 }
 
 // getCRNamespace returns the namespace of the CR associated with h.
@@ -416,4 +454,20 @@ func (h *HelmReconciler) getCRNamespace() (string, error) {
 // getClient returns the kubernetes client associated with this HelmReconciler
 func (h *HelmReconciler) getClient() client.Client {
 	return h.client
+}
+
+func (h *HelmReconciler) addPrunedKind(gk schema.GroupKind) {
+	h.countLock.Lock()
+	defer h.countLock.Unlock()
+	h.prunedKindSet[gk] = struct{}{}
+}
+
+func (h *HelmReconciler) reportPrunedObjectKind() {
+	h.countLock.Lock()
+	defer h.countLock.Unlock()
+	for gvk := range h.prunedKindSet {
+		metrics.ResourcePruneTotal.
+			With(metrics.ResourceKindLabel.Value(util.GKString(gvk))).
+			Increment()
+	}
 }

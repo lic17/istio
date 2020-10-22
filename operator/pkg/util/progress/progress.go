@@ -32,6 +32,7 @@ const (
 	StateInstalling InstallState = iota
 	StatePruning
 	StateComplete
+	StateUninstallComplete
 )
 
 // Log records the progress of an installation
@@ -58,8 +59,8 @@ const inProgress = `{{ yellow (cycle . "-" "-" "-" " ") }} `
 // createStatus will return a string to report the current status.
 // ex: - Processing resources for components. Waiting for foo, bar
 func (p *Log) createStatus(maxWidth int) string {
-	comps := []string{}
-	wait := []string{}
+	comps := make([]string, 0, len(p.components))
+	wait := make([]string, 0, len(p.components))
 	for c, l := range p.components {
 		comps = append(comps, name.UserFacingComponentName(name.ComponentName(c)))
 		wait = append(wait, l.waiting...)
@@ -142,6 +143,9 @@ func (p *Log) SetState(state InstallState) {
 		p.bar.Write()
 	case StateComplete:
 		p.bar.SetTemplateString(`{{ green "✔" }} Installation complete`)
+		p.bar.Write()
+	case StateUninstallComplete:
+		p.bar.SetTemplateString(`{{ green "✔" }} Uninstall complete`)
 		p.bar.Write()
 	}
 }

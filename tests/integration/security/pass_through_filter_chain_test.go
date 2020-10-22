@@ -1,3 +1,4 @@
+// +build integ
 // Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +38,7 @@ import (
 func TestPassThroughFilterChain(t *testing.T) {
 	framework.
 		NewTest(t).
+		Features("security.filterchain").
 		Run(func(ctx framework.TestContext) {
 			ns := namespace.NewOrFail(t, ctx, namespace.Config{
 				Prefix: "pass-through-filter-chain",
@@ -84,7 +86,7 @@ func TestPassThroughFilterChain(t *testing.T) {
 			}
 
 			var x, a, b, c, d echo.Instance
-			echoboot.NewBuilderOrFail(t, ctx).
+			echoboot.NewBuilder(ctx).
 				With(&x, newEchoConfig("x")).
 				With(&a, newEchoConfig("a")).
 				With(&b, newEchoConfig("b")).

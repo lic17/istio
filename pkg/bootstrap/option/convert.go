@@ -15,10 +15,10 @@
 package option
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -30,14 +30,12 @@ import (
 	pstruct "github.com/golang/protobuf/ptypes/struct"
 	"github.com/golang/protobuf/ptypes/wrappers"
 
+	meshAPI "istio.io/api/mesh/v1alpha1"
 	networkingAPI "istio.io/api/networking/v1alpha3"
-	"istio.io/pkg/log"
-
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/util"
 	authn_model "istio.io/istio/pilot/pkg/security/model"
-	v3 "istio.io/istio/pilot/pkg/xds/v3"
-	"istio.io/istio/pkg/config/mesh"
+	"istio.io/pkg/log"
 )
 
 //TransportSocket wraps UpstreamTLSContext
@@ -95,9 +93,6 @@ func tlsContextConvert(tls *networkingAPI.ClientTLSSettings, sniName string, met
 		CommonTlsContext: &auth.CommonTlsContext{},
 	}
 
-	// We always set v3, since we know this is a new proxy that supports v3
-	requestedType := v3.ClusterType
-
 	switch tls.Mode {
 	case networkingAPI.ClientTLSSettings_SIMPLE:
 		res := model.SdsCertificateConfig{
@@ -107,7 +102,7 @@ func tlsContextConvert(tls *networkingAPI.ClientTLSSettings, sniName string, met
 		tlsContext.CommonTlsContext.ValidationContextType = &auth.CommonTlsContext_CombinedValidationContext{
 			CombinedValidationContext: &auth.CommonTlsContext_CombinedCertificateValidationContext{
 				DefaultValidationContext:         &auth.CertificateValidationContext{MatchSubjectAltNames: util.StringToExactMatch(tls.SubjectAltNames)},
-				ValidationContextSdsSecretConfig: authn_model.ConstructSdsSecretConfig(res.GetRootResourceName(), mesh.DefaultSdsUdsPath, requestedType),
+				ValidationContextSdsSecretConfig: authn_model.ConstructSdsSecretConfig(res.GetRootResourceName()),
 			},
 		}
 		tlsContext.CommonTlsContext.AlpnProtocols = util.ALPNH2Only
@@ -119,24 +114,24 @@ func tlsContextConvert(tls *networkingAPI.ClientTLSSettings, sniName string, met
 		}
 		if len(res.GetResourceName()) > 0 {
 			tlsContext.CommonTlsContext.TlsCertificateSdsSecretConfigs = append(tlsContext.CommonTlsContext.TlsCertificateSdsSecretConfigs,
-				authn_model.ConstructSdsSecretConfig(res.GetResourceName(), mesh.DefaultSdsUdsPath, requestedType))
+				authn_model.ConstructSdsSecretConfig(res.GetResourceName()))
 		}
 
 		tlsContext.CommonTlsContext.ValidationContextType = &auth.CommonTlsContext_CombinedValidationContext{
 			CombinedValidationContext: &auth.CommonTlsContext_CombinedCertificateValidationContext{
 				DefaultValidationContext:         &auth.CertificateValidationContext{MatchSubjectAltNames: util.StringToExactMatch(tls.SubjectAltNames)},
-				ValidationContextSdsSecretConfig: authn_model.ConstructSdsSecretConfig(res.GetRootResourceName(), mesh.DefaultSdsUdsPath, requestedType),
+				ValidationContextSdsSecretConfig: authn_model.ConstructSdsSecretConfig(res.GetRootResourceName()),
 			},
 		}
 		tlsContext.CommonTlsContext.AlpnProtocols = util.ALPNH2Only
 	case networkingAPI.ClientTLSSettings_ISTIO_MUTUAL:
 		tlsContext.CommonTlsContext.TlsCertificateSdsSecretConfigs = append(tlsContext.CommonTlsContext.TlsCertificateSdsSecretConfigs,
-			authn_model.ConstructSdsSecretConfig(authn_model.SDSDefaultResourceName, mesh.DefaultSdsUdsPath, requestedType))
+			authn_model.ConstructSdsSecretConfig(authn_model.SDSDefaultResourceName))
 
 		tlsContext.CommonTlsContext.ValidationContextType = &auth.CommonTlsContext_CombinedValidationContext{
 			CombinedValidationContext: &auth.CommonTlsContext_CombinedCertificateValidationContext{
 				DefaultValidationContext:         &auth.CertificateValidationContext{MatchSubjectAltNames: util.StringToExactMatch(tls.SubjectAltNames)},
-				ValidationContextSdsSecretConfig: authn_model.ConstructSdsSecretConfig(authn_model.SDSRootResourceName, mesh.DefaultSdsUdsPath, requestedType),
+				ValidationContextSdsSecretConfig: authn_model.ConstructSdsSecretConfig(authn_model.SDSRootResourceName),
 			},
 		}
 		tlsContext.CommonTlsContext.AlpnProtocols = util.ALPNInMeshH2
@@ -144,7 +139,7 @@ func tlsContextConvert(tls *networkingAPI.ClientTLSSettings, sniName string, met
 		// No TLS.
 		return nil
 	}
-	if len(sniName) > 0 {
+	if len(tls.Sni) == 0 && tls.Mode == networkingAPI.ClientTLSSettings_ISTIO_MUTUAL {
 		tlsContext.Sni = sniName
 	}
 	return tlsContext
@@ -176,6 +171,17 @@ func addressConverter(addr string) convertFunc {
 		if err != nil {
 			return nil, fmt.Errorf("unable to parse %s address %q: %v", o.name, addr, err)
 		}
+		if host == "$(HOST_IP)" {
+			// Replace host with HOST_IP env var if it is "$(HOST_IP)".
+			// This is to support some tracer setting (Datadog, Zipkin), where "$(HOST_IP)"" is used for address.
+			// Tracer address used to be specified within proxy container params, and thus could be interpreted with pod HOST_IP env var.
+			// Now tracer config is passed in with mesh config volumn at gateway, k8s env var interpretation does not work.
+			// This is to achieve the same interpretation as k8s.
+			hostIPEnv := os.Getenv("HOST_IP")
+			if hostIPEnv != "" {
+				host = hostIPEnv
+			}
+		}
 
 		return fmt.Sprintf("{\"address\": \"%s\", \"port_value\": %s}", host, port), nil
 	}
@@ -187,9 +193,30 @@ func durationConverter(value *types.Duration) convertFunc {
 	}
 }
 
-func podIPConverter(value net.IP) convertFunc {
+// openCensusAgentContextConverter returns a converter that returns the list of
+// distributed trace contexts to propagate with envoy.
+func openCensusAgentContextConverter(contexts []meshAPI.Tracing_OpenCensusAgent_TraceContext) convertFunc {
+	allContexts := `["TRACE_CONTEXT","GRPC_TRACE_BIN","CLOUD_TRACE_CONTEXT","B3"]`
 	return func(*instance) (interface{}, error) {
-		return base64.StdEncoding.EncodeToString(value), nil
+		if len(contexts) == 0 {
+			return allContexts, nil
+		}
+
+		var envoyContexts []string
+		for _, c := range contexts {
+			switch c {
+			// Ignore UNSPECIFIED
+			case meshAPI.Tracing_OpenCensusAgent_W3C_TRACE_CONTEXT:
+				envoyContexts = append(envoyContexts, "TRACE_CONTEXT")
+			case meshAPI.Tracing_OpenCensusAgent_GRPC_BIN:
+				envoyContexts = append(envoyContexts, "GRPC_TRACE_BIN")
+			case meshAPI.Tracing_OpenCensusAgent_CLOUD_TRACE_CONTEXT:
+				envoyContexts = append(envoyContexts, "CLOUD_TRACE_CONTEXT")
+			case meshAPI.Tracing_OpenCensusAgent_B3:
+				envoyContexts = append(envoyContexts, "B3")
+			}
+		}
+		return convertToJSON(envoyContexts), nil
 	}
 }
 

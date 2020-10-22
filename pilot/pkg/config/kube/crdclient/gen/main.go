@@ -41,6 +41,8 @@ type ConfigData struct {
 	ClientGroupPath string
 	ClientTypePath  string
 	Kind            string
+	StatusAPIImport string
+	StatusKind      string
 
 	// Support service-apis, which require a custom client and the Spec suffix
 	Client     string
@@ -58,6 +60,8 @@ func MakeConfigData(schema collection.Schema) ConfigData {
 		ClientTypePath:  clientGoTypePath[schema.Resource().Plural()],
 		Kind:            schema.Resource().Kind(),
 		Client:          "ic",
+		StatusAPIImport: apiImport[schema.Resource().StatusPackage()],
+		StatusKind:      schema.Resource().StatusKind(),
 	}
 	if schema.Resource().Group() == "networking.x-k8s.io" {
 		out.Client = "sc"
@@ -70,21 +74,19 @@ func MakeConfigData(schema collection.Schema) ConfigData {
 var (
 	// Mapping from istio/api path import to api import path
 	apiImport = map[string]string{
-		"istio.io/api/mixer/v1/config/client":    "mixerclientv1",
 		"istio.io/api/networking/v1alpha3":       "networkingv1alpha3",
 		"istio.io/api/security/v1beta1":          "securityv1beta1",
 		"sigs.k8s.io/service-apis/apis/v1alpha1": "servicev1alpha1",
+		"istio.io/api/meta/v1alpha1":             "metav1alpha1",
 	}
 	// Mapping from istio/api path import to client go import path
 	clientGoImport = map[string]string{
-		"istio.io/api/mixer/v1/config/client":    "clientconfigv1alpha3",
 		"istio.io/api/networking/v1alpha3":       "clientnetworkingv1alpha3",
 		"istio.io/api/security/v1beta1":          "clientsecurityv1beta1",
 		"sigs.k8s.io/service-apis/apis/v1alpha1": "servicev1alpha1",
 	}
 	// Translates an api import path to the top level path in client-go
 	clientGoAccessPath = map[string]string{
-		"istio.io/api/mixer/v1/config/client":    "ConfigV1alpha2",
 		"istio.io/api/networking/v1alpha3":       "NetworkingV1alpha3",
 		"istio.io/api/security/v1beta1":          "SecurityV1beta1",
 		"sigs.k8s.io/service-apis/apis/v1alpha1": "NetworkingV1alpha1",
@@ -92,10 +94,6 @@ var (
 	// Translates a plural type name to the type path in client-go
 	// TODO: can we automatically derive this? I don't think we can, its internal to the kubegen
 	clientGoTypePath = map[string]string{
-		"httpapispecbindings":    "HTTPAPISpecBindings",
-		"httpapispecs":           "HTTPAPISpecs",
-		"quotaspecbindings":      "QuotaSpecBindings",
-		"quotaspecs":             "QuotaSpecs",
 		"destinationrules":       "DestinationRules",
 		"envoyfilters":           "EnvoyFilters",
 		"gateways":               "Gateways",
@@ -103,13 +101,15 @@ var (
 		"sidecars":               "Sidecars",
 		"virtualservices":        "VirtualServices",
 		"workloadentries":        "WorkloadEntries",
+		"workloadgroups":         "WorkloadGroups",
 		"authorizationpolicies":  "AuthorizationPolicies",
 		"peerauthentications":    "PeerAuthentications",
 		"requestauthentications": "RequestAuthentications",
 		"gatewayclasses":         "GatewayClasses",
 		"httproutes":             "HTTPRoutes",
-		"tcproutes":              "TcpRoutes",
-		"trafficsplits":          "TrafficSplits",
+		"tcproutes":              "TCPRoutes",
+		"tlsroutes":              "TLSRoutes",
+		"backendpolicies":        "BackendPolicies",
 	}
 )
 

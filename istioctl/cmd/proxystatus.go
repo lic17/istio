@@ -17,6 +17,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
+	"os"
 
 	envoy_corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	xdsapi "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
@@ -29,39 +31,65 @@ import (
 	"istio.io/istio/istioctl/pkg/writer/pilot"
 	pilotxds "istio.io/istio/pilot/pkg/xds"
 	"istio.io/istio/pkg/kube"
+	"istio.io/pkg/log"
 )
 
 func statusCommand() *cobra.Command {
 	var opts clioptions.ControlPlaneOptions
 
 	statusCmd := &cobra.Command{
-		Use:   "proxy-status [<pod-name[.namespace]>]",
+		Use:   "proxy-status [<type>/]<name>[.<namespace>]",
 		Short: "Retrieves the synchronization status of each Envoy in the mesh [kube only]",
 		Long: `
 Retrieves last sent and last acknowledged xDS sync from Istiod to each Envoy in the mesh
 
 `,
-		Example: `# Retrieve sync status for all Envoys in a mesh
-	istioctl proxy-status
+		Example: `  # Retrieve sync status for all Envoys in a mesh
+  istioctl proxy-status
 
-# Retrieve sync diff for a single Envoy and Istiod
-	istioctl proxy-status istio-egressgateway-59585c5b9c-ndc59.istio-system
+  # Retrieve sync diff for a single Envoy and Istiod
+  istioctl proxy-status istio-egressgateway-59585c5b9c-ndc59.istio-system
+
+  # Retrieve sync diff between Istiod and one pod under a deployment
+  istioctl proxy-status deployment/productpage-v1
+
+  # Write proxy config-dump to file, and compare to Istio control plane
+  kubectl port-forward -n istio-system istio-egressgateway-59585c5b9c-ndc59 15000 &
+  curl localhost:15000/config_dump > cd.json
+  istioctl proxy-status istio-egressgateway-59585c5b9c-ndc59.istio-system --file cd.json
 `,
 		Aliases: []string{"ps"},
+		Args: func(cmd *cobra.Command, args []string) error {
+			if (len(args) == 0) && (configDumpFile != "") {
+				cmd.Println(cmd.UsageString())
+				return fmt.Errorf("--file can only be used when pod-name is specified")
+			}
+			return nil
+		},
 		RunE: func(c *cobra.Command, args []string) error {
 			kubeClient, err := kubeClientWithRevision(kubeconfig, configContext, opts.Revision)
 			if err != nil {
 				return err
 			}
 			if len(args) > 0 {
-				podName, ns := handlers.InferPodInfo(args[0], handlers.HandleNamespace(namespace, defaultNamespace))
-				path := "config_dump"
-				envoyDump, err := kubeClient.EnvoyDo(context.TODO(), podName, ns, "GET", path, nil)
+				podName, ns, err := handlers.InferPodInfoFromTypedResource(args[0],
+					handlers.HandleNamespace(namespace, defaultNamespace),
+					kubeClient.UtilFactory())
+				if err != nil {
+					return err
+				}
+				var envoyDump []byte
+				if configDumpFile != "" {
+					envoyDump, err = readConfigFile(configDumpFile)
+				} else {
+					path := "config_dump"
+					envoyDump, err = kubeClient.EnvoyDo(context.TODO(), podName, ns, "GET", path, nil)
+				}
 				if err != nil {
 					return err
 				}
 
-				path = fmt.Sprintf("/debug/config_dump?proxyID=%s.%s", podName, ns)
+				path := fmt.Sprintf("/debug/config_dump?proxyID=%s.%s", podName, ns)
 				istiodDumps, err := kubeClient.AllDiscoveryDo(context.TODO(), istioNamespace, path)
 				if err != nil {
 					return err
@@ -82,8 +110,31 @@ Retrieves last sent and last acknowledged xDS sync from Istiod to each Envoy in 
 	}
 
 	opts.AttachControlPlaneFlags(statusCmd)
+	statusCmd.PersistentFlags().StringVarP(&configDumpFile, "file", "f", "",
+		"Envoy config dump JSON file")
 
 	return statusCmd
+}
+
+func readConfigFile(filename string) ([]byte, error) {
+	file := os.Stdin
+	if filename != "-" {
+		var err error
+		file, err = os.Open(filename)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Errorf("failed to close %s: %s", filename, err)
+		}
+	}()
+	data, err := ioutil.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func newKubeClientWithRevision(kubeconfig, configContext string, revision string) (kube.ExtendedClient, error) {
@@ -99,17 +150,34 @@ func xdsStatusCommand() *cobra.Command {
 	var centralOpts clioptions.CentralControlPlaneOptions
 
 	statusCmd := &cobra.Command{
-		Use:   "proxy-status [<pod-name[.namespace]>]",
+		Use:   "proxy-status [<type>/]<name>[.<namespace>]",
 		Short: "Retrieves the synchronization status of each Envoy in the mesh",
 		Long: `
 Retrieves last sent and last acknowledged xDS sync from Istiod to each Envoy in the mesh
-
 `,
-		Example: `# Retrieve sync status for all Envoys in a mesh
-	istioctl proxy-status
+		Example: `  # Retrieve sync status for all Envoys in a mesh
+  istioctl x proxy-status
 
-# Retrieve sync diff for a single Envoy and Istiod
-	istioctl proxy-status istio-egressgateway-59585c5b9c-ndc59.istio-system
+  # Retrieve sync diff for a single Envoy and Istiod
+  istioctl x proxy-status istio-egressgateway-59585c5b9c-ndc59.istio-system
+
+  # SECURITY OPTIONS
+
+  # Retrieve proxy status information directly from the control plane, using token security
+  # (This is the usual way to get the proxy-status with an out-of-cluster control plane.)
+  istioctl x ps --xds-address istio.cloudprovider.example.com:15012
+
+  # Retrieve proxy status information via Kubernetes config, using token security
+  # (This is the usual way to get the proxy-status with an in-cluster control plane.)
+  istioctl x proxy-status
+
+  # Retrieve proxy status information directly from the control plane, using RSA certificate security
+  # (Certificates must be obtained before this step.  The --cert-dir flag lets istioctl bypass the Kubernetes API server.)
+  istioctl x ps --xds-address istio.example.com:15012 --cert-dir ~/.istio-certs
+
+  # Retrieve proxy status information via XDS from specific control plane in multi-control plane in-cluster configuration
+  # (Select a specific control plane in an in-cluster canary Istio configuration.)
+  istioctl x ps --xds-label istio.io/rev=default
 `,
 		Aliases: []string{"ps"},
 		RunE: func(c *cobra.Command, args []string) error {
@@ -119,7 +187,12 @@ Retrieves last sent and last acknowledged xDS sync from Istiod to each Envoy in 
 			}
 
 			if len(args) > 0 {
-				podName, ns := handlers.InferPodInfo(args[0], handlers.HandleNamespace(namespace, defaultNamespace))
+				podName, ns, err := handlers.InferPodInfoFromTypedResource(args[0],
+					handlers.HandleNamespace(namespace, defaultNamespace),
+					kubeClient.UtilFactory())
+				if err != nil {
+					return err
+				}
 				path := "config_dump"
 				envoyDump, err := kubeClient.EnvoyDo(context.TODO(), podName, ns, "GET", path, nil)
 				if err != nil {

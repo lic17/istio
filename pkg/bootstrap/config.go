@@ -26,19 +26,15 @@ import (
 
 	md "cloud.google.com/go/compute/metadata"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
-
-	"istio.io/istio/pkg/config/constants"
-
 	"github.com/gogo/protobuf/types"
 
 	meshAPI "istio.io/api/mesh/v1alpha1"
-	"istio.io/pkg/log"
-
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/util"
 	"istio.io/istio/pkg/bootstrap/option"
 	"istio.io/istio/pkg/bootstrap/platform"
-	"istio.io/istio/pkg/spiffe"
+	"istio.io/istio/pkg/config/constants"
+	"istio.io/pkg/log"
 )
 
 const (
@@ -51,7 +47,7 @@ const (
 	lightstepAccessTokenBase = "lightstep_access_token.txt"
 
 	// required stats are used by readiness checks.
-	requiredEnvoyStatsMatcherInclusionPrefixes = "cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grpc,wasm"
+	requiredEnvoyStatsMatcherInclusionPrefixes = "cluster_manager,listener_manager,server,cluster.xds-grpc,wasm"
 
 	// Prefixes of V2 metrics.
 	// "reporter" prefix is for istio standard metrics.
@@ -82,18 +78,15 @@ type Config struct {
 	Proxy               *meshAPI.ProxyConfig
 	PlatEnv             platform.Environment
 	PilotSubjectAltName []string
-	MixerSubjectAltName []string
 	LocalEnv            []string
 	NodeIPs             []string
-	PodName             string
-	PodNamespace        string
-	PodIP               net.IP
 	STSPort             int
-	ControlPlaneAuth    bool
-	DisableReportCalls  bool
+	ProxyViaAgent       bool
 	OutlierLogPath      string
 	PilotCertProvider   string
 	ProvCert            string
+	DiscoveryHost       string
+	CallCredentials     bool
 }
 
 // newTemplateParams creates a new template configuration for the given configuration.
@@ -101,9 +94,6 @@ func (cfg Config) toTemplateParams() (map[string]interface{}, error) {
 	opts := make([]option.Instance, 0)
 
 	// Fill in default config values.
-	if cfg.PilotSubjectAltName == nil {
-		cfg.PilotSubjectAltName = defaultPilotSAN()
-	}
 	if cfg.PlatEnv == nil {
 		cfg.PlatEnv = platform.Discover()
 	}
@@ -113,16 +103,13 @@ func (cfg Config) toTemplateParams() (map[string]interface{}, error) {
 
 	opts = append(opts,
 		option.NodeID(cfg.Node),
-		option.PodName(cfg.PodName),
-		option.PodNamespace(cfg.PodNamespace),
-		option.PodIP(cfg.PodIP),
 		option.PilotSubjectAltName(cfg.PilotSubjectAltName),
-		option.MixerSubjectAltName(cfg.MixerSubjectAltName),
-		option.ControlPlaneAuth(cfg.ControlPlaneAuth),
-		option.DisableReportCalls(cfg.DisableReportCalls),
+		option.ProxyViaAgent(cfg.ProxyViaAgent),
 		option.PilotCertProvider(cfg.PilotCertProvider),
 		option.OutlierLogPath(cfg.OutlierLogPath),
-		option.ProvCert(cfg.ProvCert))
+		option.ProvCert(cfg.ProvCert),
+		option.CallCredentials(cfg.CallCredentials),
+		option.DiscoveryHost(cfg.DiscoveryHost))
 
 	if cfg.STSPort > 0 {
 		opts = append(opts,
@@ -221,10 +208,14 @@ var (
 )
 
 func getStatsOptions(meta *model.BootstrapNodeMetadata, nodeIPs []string, config *meshAPI.ProxyConfig) []option.Instance {
-	parseOption := func(metaOption string, required string) []string {
+	parseOption := func(metaOption string, required string, proxyConfigOption []string) []string {
 		var inclusionOption []string
 		if len(metaOption) > 0 {
 			inclusionOption = strings.Split(metaOption, ",")
+		} else if proxyConfigOption != nil {
+			// In case user relies on mixed usage of annotation and proxy config,
+			// only consider proxy config if annotation is not set instead of merging.
+			inclusionOption = proxyConfigOption
 		}
 
 		if len(required) > 0 {
@@ -252,17 +243,20 @@ func getStatsOptions(meta *model.BootstrapNodeMetadata, nodeIPs []string, config
 		}
 	}
 
+	var proxyConfigPrefixes, proxyConfigSuffixes, proxyConfigRegexps []string
+	if config.ProxyStatsMatcher != nil {
+		proxyConfigPrefixes = config.ProxyStatsMatcher.InclusionPrefixes
+		proxyConfigSuffixes = config.ProxyStatsMatcher.InclusionSuffixes
+		proxyConfigRegexps = config.ProxyStatsMatcher.InclusionRegexps
+	}
+
 	return []option.Instance{
-		option.EnvoyStatsMatcherInclusionPrefix(parseOption(meta.StatsInclusionPrefixes, requiredEnvoyStatsMatcherInclusionPrefixes)),
-		option.EnvoyStatsMatcherInclusionSuffix(parseOption(meta.StatsInclusionSuffixes, "")),
-		option.EnvoyStatsMatcherInclusionRegexp(parseOption(meta.StatsInclusionRegexps, "")),
+		option.EnvoyStatsMatcherInclusionPrefix(parseOption(meta.StatsInclusionPrefixes,
+			requiredEnvoyStatsMatcherInclusionPrefixes, proxyConfigPrefixes)),
+		option.EnvoyStatsMatcherInclusionSuffix(parseOption(meta.StatsInclusionSuffixes, "", proxyConfigSuffixes)),
+		option.EnvoyStatsMatcherInclusionRegexp(parseOption(meta.StatsInclusionRegexps, "", proxyConfigRegexps)),
 		option.EnvoyExtraStatTags(extraStatTags),
 	}
-}
-
-func defaultPilotSAN() []string {
-	return []string{
-		spiffe.MustGenSpiffeURI("istio-system", "istio-pilot-service-account")}
 }
 
 func lightstepAccessTokenFile(config string) string {
@@ -339,7 +333,12 @@ func getProxyConfigOptions(config *meshAPI.ProxyConfig, metadata *model.Bootstra
 				option.StackDriverMaxAnnotations(getInt64ValueOrDefault(tracer.Stackdriver.MaxNumberOfAnnotations, 200)),
 				option.StackDriverMaxAttributes(getInt64ValueOrDefault(tracer.Stackdriver.MaxNumberOfAttributes, 200)),
 				option.StackDriverMaxEvents(getInt64ValueOrDefault(tracer.Stackdriver.MaxNumberOfMessageEvents, 200)))
+		case *meshAPI.Tracing_OpenCensusAgent_:
+			c := tracer.OpenCensusAgent.Context
+			opts = append(opts, option.OpenCensusAgentAddress(tracer.OpenCensusAgent.Address),
+				option.OpenCensusAgentContexts(c))
 		}
+
 		opts = append(opts, option.TracingTLS(config.Tracing.TlsSettings, metadata, isH2))
 	}
 
@@ -498,15 +497,15 @@ func getNodeMetaData(envs []string, plat platform.Environment, nodeIPs []string,
 	// Support multiple network interfaces, removing duplicates.
 	meta.InstanceIPs = nodeIPs
 
-	// sds is enabled by default
-	meta.SdsEnabled = true
-
 	// Add STS port into node metadata if it is not 0. This is read by envoy telemetry filters
 	if stsPort != 0 {
 		meta.StsPort = strconv.Itoa(stsPort)
 	}
 
 	meta.ProxyConfig = (*model.NodeMetaProxyConfig)(pc)
+
+	// Add all instance labels with lower precedence than pod labels
+	extractInstanceLabels(plat, meta)
 
 	// Add all pod labels found from filesystem
 	// These are typically volume mounted by the downward API
@@ -523,6 +522,21 @@ func getNodeMetaData(envs []string, plat platform.Environment, nodeIPs []string,
 	}
 
 	return meta, untypedMeta, nil
+}
+
+// Extracts instance labels for the platform into model.NodeMetadata.Labels
+// only if not running on Kubernetes
+func extractInstanceLabels(plat platform.Environment, meta *model.BootstrapNodeMetadata) {
+	if plat == nil || meta == nil || plat.IsKubernetes() {
+		return
+	}
+	instanceLabels := plat.Labels()
+	if meta.Labels == nil {
+		meta.Labels = map[string]string{}
+	}
+	for k, v := range instanceLabels {
+		meta.Labels[k] = v
+	}
 }
 
 func readPodLabels() (map[string]string, error) {

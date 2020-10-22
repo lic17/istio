@@ -1,3 +1,4 @@
+// +build integ
 // Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,22 +16,36 @@
 package pilot
 
 import (
+	"fmt"
+	"io/ioutil"
 	"testing"
 
 	"istio.io/istio/pkg/config/protocol"
-	"istio.io/istio/pkg/test/framework/components/echo"
-	"istio.io/istio/pkg/test/framework/components/namespace"
-
 	"istio.io/istio/pkg/test/framework"
+	"istio.io/istio/pkg/test/framework/components/echo"
 	"istio.io/istio/pkg/test/framework/components/istio"
-	"istio.io/istio/pkg/test/framework/components/pilot"
+	"istio.io/istio/pkg/test/framework/components/namespace"
 	"istio.io/istio/pkg/test/framework/resource"
+	"istio.io/istio/tests/integration/pilot/common"
 )
 
 var (
 	i istio.Instance
-	p pilot.Instance
+
+	// Below are various preconfigured echo deployments. Whenever possible, tests should utilize these
+	// to avoid excessive creation/tear down of deployments. In general, a test should only deploy echo if
+	// its doing something unique to that specific test.
+	apps = &common.EchoDeployments{}
 )
+
+func supportsCRDv1(ctx resource.Context) bool {
+	ver, err := ctx.Clusters()[0].GetKubernetesVersion()
+	if err != nil {
+		return true
+	}
+	serverVersion := fmt.Sprintf("%s.%s", ver.Major, ver.Minor)
+	return serverVersion >= "1.16"
+}
 
 // TestMain defines the entrypoint for pilot tests using a standard Istio installation.
 // If a test requires a custom install it should go into its own package, otherwise it should go
@@ -38,19 +53,19 @@ var (
 func TestMain(m *testing.M) {
 	framework.
 		NewSuite(m).
-		RequireSingleCluster().
-		Setup(istio.Setup(&i, func(cfg *istio.Config) {
-			cfg.ControlPlaneValues = `
-values:
-  global:
-    meshExpansion:
-      enabled: true`
-		})).
 		Setup(func(ctx resource.Context) (err error) {
-			if p, err = pilot.New(ctx, pilot.Config{}); err != nil {
-				return err
+			if supportsCRDv1(ctx) {
+				crd, err := ioutil.ReadFile("testdata/service-apis-crd.yaml")
+				if err != nil {
+					return err
+				}
+				return ctx.Config().ApplyYAML("", string(crd))
 			}
 			return nil
+		}).
+		Setup(istio.Setup(&i, nil)).
+		Setup(func(ctx resource.Context) error {
+			return common.SetupApps(ctx, i, apps)
 		}).
 		Run()
 }

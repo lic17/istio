@@ -15,11 +15,6 @@
 package authz
 
 import (
-	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
-	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
-
-	"istio.io/pkg/log"
-
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking"
 	"istio.io/istio/pilot/pkg/networking/plugin"
@@ -28,6 +23,7 @@ import (
 	"istio.io/istio/pilot/pkg/security/trustdomain"
 	"istio.io/istio/pkg/config/labels"
 	"istio.io/istio/pkg/spiffe"
+	"istio.io/pkg/log"
 )
 
 var (
@@ -50,7 +46,7 @@ func (Plugin) OnOutboundListener(in *plugin.InputParams, mutable *networking.Mut
 		return nil
 	}
 
-	buildFilter(in, mutable)
+	buildFilter(in, mutable, false)
 	return nil
 }
 
@@ -60,7 +56,7 @@ func (Plugin) OnInboundFilterChains(in *plugin.InputParams) []networking.FilterC
 }
 
 // OnInboundListener is called whenever a new listener is added to the LDS output for a given service
-// Can be used to add additional filters (e.g., mixer filter) or add more stuff to the HTTP connection manager
+// Can be used to add additional filters or add more stuff to the HTTP connection manager
 // on the inbound path
 func (Plugin) OnInboundListener(in *plugin.InputParams, mutable *networking.MutableObjects) error {
 	if in.Node.Type != model.SidecarProxy {
@@ -68,11 +64,11 @@ func (Plugin) OnInboundListener(in *plugin.InputParams, mutable *networking.Muta
 		return nil
 	}
 
-	buildFilter(in, mutable)
+	buildFilter(in, mutable, false)
 	return nil
 }
 
-func buildFilter(in *plugin.InputParams, mutable *networking.MutableObjects) {
+func buildFilter(in *plugin.InputParams, mutable *networking.MutableObjects, isOnInboundPassthrough bool) {
 	if in.Push == nil || in.Push.AuthzPolicies == nil {
 		authzLog.Debugf("no authorization policy in push context")
 		return
@@ -83,7 +79,12 @@ func buildFilter(in *plugin.InputParams, mutable *networking.MutableObjects) {
 	tdBundle := trustdomain.NewBundle(spiffe.GetTrustDomain(), in.Push.Mesh.TrustDomainAliases)
 	namespace := in.Node.ConfigNamespace
 	workload := labels.Collection{in.Node.Metadata.Labels}
-	b := builder.New(tdBundle, workload, namespace, in.Push.AuthzPolicies, util.IsIstioVersionGE15(in.Node))
+	option := builder.Option{
+		IsIstioVersionGE15:     util.IsIstioVersionGE15(in.Node),
+		IsOnInboundPassthrough: isOnInboundPassthrough,
+	}
+
+	b := builder.New(tdBundle, workload, namespace, in.Push.AuthzPolicies, option)
 	if b == nil {
 		authzLog.Debugf("no authorization policy for workload %v in %s", workload, namespace)
 		return
@@ -150,27 +151,6 @@ func buildFilter(in *plugin.InputParams, mutable *networking.MutableObjects) {
 	}
 }
 
-// OnVirtualListener implements the Plugin interface method.
-func (Plugin) OnVirtualListener(in *plugin.InputParams, mutable *networking.MutableObjects) error {
-	return nil
-}
-
-// OnInboundCluster implements the Plugin interface method.
-func (Plugin) OnInboundCluster(in *plugin.InputParams, cluster *cluster.Cluster) {
-}
-
-// OnOutboundRouteConfiguration implements the Plugin interface method.
-func (Plugin) OnOutboundRouteConfiguration(in *plugin.InputParams, route *route.RouteConfiguration) {
-}
-
-// OnInboundRouteConfiguration implements the Plugin interface method.
-func (Plugin) OnInboundRouteConfiguration(in *plugin.InputParams, route *route.RouteConfiguration) {
-}
-
-// OnOutboundCluster implements the Plugin interface method.
-func (Plugin) OnOutboundCluster(in *plugin.InputParams, cluster *cluster.Cluster) {
-}
-
 // OnInboundPassthrough is called whenever a new passthrough filter chain is added to the LDS output.
 func (Plugin) OnInboundPassthrough(in *plugin.InputParams, mutable *networking.MutableObjects) error {
 	if in.Node.Type != model.SidecarProxy {
@@ -178,7 +158,7 @@ func (Plugin) OnInboundPassthrough(in *plugin.InputParams, mutable *networking.M
 		return nil
 	}
 
-	buildFilter(in, mutable)
+	buildFilter(in, mutable, true)
 	return nil
 }
 

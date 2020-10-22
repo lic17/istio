@@ -46,8 +46,6 @@ const (
 	HelmValuesHubSubpath = "hub"
 	// HelmValuesTagSubpath is the subpath from the component root to the tag parameter.
 	HelmValuesTagSubpath = "tag"
-	// devDbg generates lots of output useful in development.
-	devDbg = false
 )
 
 var (
@@ -108,9 +106,7 @@ func NewTranslator() *Translator {
 			"MeshConfig":  {OutPath: "meshConfig"},
 		},
 		GlobalNamespaces: map[name.ComponentName]string{
-			name.PilotComponentName:     "istioNamespace",
-			name.TelemetryComponentName: "telemetryNamespace",
-			name.PolicyComponentName:    "policyNamespace",
+			name.PilotComponentName: "istioNamespace",
 		},
 		ComponentMaps: map[name.ComponentName]*ComponentMaps{
 			name.IstioBaseComponentName: {
@@ -124,20 +120,6 @@ func NewTranslator() *Translator {
 				ContainerName:        "discovery",
 				HelmSubdir:           "istio-control/istio-discovery",
 				ToHelmValuesTreeRoot: "pilot",
-			},
-			name.PolicyComponentName: {
-				ResourceType:         "Deployment",
-				ResourceName:         "istio-policy",
-				ContainerName:        "mixer",
-				HelmSubdir:           "istio-policy",
-				ToHelmValuesTreeRoot: "mixer.policy",
-			},
-			name.TelemetryComponentName: {
-				ResourceType:         "Deployment",
-				ResourceName:         "istio-telemetry",
-				ContainerName:        "mixer",
-				HelmSubdir:           "istio-telemetry/mixer-telemetry",
-				ToHelmValuesTreeRoot: "mixer.telemetry",
 			},
 			name.IngressComponentName: {
 				ResourceType:         "Deployment",
@@ -172,42 +154,6 @@ func NewTranslator() *Translator {
 				HelmSubdir:           "istiocoredns",
 				ToHelmValuesTreeRoot: "istiocoredns",
 			},
-			name.ComponentName("Tracing"): {
-				ResourceType:         "Deployment",
-				ResourceName:         "istio-tracing",
-				ContainerName:        "jaeger",
-				HelmSubdir:           "istio-telemetry/tracing",
-				ToHelmValuesTreeRoot: "tracing.jaeger",
-			},
-			name.ComponentName("PrometheusOperator"): {
-				ResourceType:         "Deployment",
-				ResourceName:         "prometheus",
-				ContainerName:        "prometheus",
-				HelmSubdir:           "istio-telemetry/prometheusOperator",
-				ToHelmValuesTreeRoot: "prometheus",
-				SkipReverseTranslate: true,
-			},
-			name.ComponentName("Kiali"): {
-				ResourceType:         "Deployment",
-				ResourceName:         "kiali",
-				ContainerName:        "kiali",
-				HelmSubdir:           "istio-telemetry/kiali",
-				ToHelmValuesTreeRoot: "kiali",
-			},
-			name.ComponentName("Grafana"): {
-				ResourceType:         "Deployment",
-				ResourceName:         "grafana",
-				ContainerName:        "grafana",
-				HelmSubdir:           "istio-telemetry/grafana",
-				ToHelmValuesTreeRoot: "grafana",
-			},
-			name.ComponentName("Prometheus"): {
-				ResourceType:         "Deployment",
-				ResourceName:         "prometheus",
-				ContainerName:        "prometheus",
-				HelmSubdir:           "istio-telemetry/prometheus",
-				ToHelmValuesTreeRoot: "prometheus",
-			},
 		},
 		// nolint: lll
 		KubernetesMapping: map[string]*Translation{
@@ -226,6 +172,7 @@ func NewTranslator() *Translator {
 			"Components.{{.ComponentName}}.K8S.Tolerations":         {OutPath: "[{{.ResourceType}}:{{.ResourceName}}].spec.template.spec.tolerations"},
 			"Components.{{.ComponentName}}.K8S.ServiceAnnotations":  {OutPath: "[Service:{{.ResourceName}}].metadata.annotations"},
 			"Components.{{.ComponentName}}.K8S.Service":             {OutPath: "[Service:{{.ResourceName}}].spec"},
+			"Components.{{.ComponentName}}.K8S.SecurityContext":     {OutPath: "[{{.ResourceType}}:{{.ResourceName}}].spec.template.spec.securityContext"},
 		},
 	}
 	return t
@@ -249,30 +196,42 @@ func (t *Translator) OverlayK8sSettings(yml string, iop *v1alpha1.IstioOperatorS
 		if err != nil {
 			return "", err
 		}
-		inPath = strings.Replace(inPath, "gressGateways.", "gressGateways."+fmt.Sprint(index)+".", 1)
-		scope.Debugf("Checking for path %s in IstioOperatorSpec", inPath)
+		renderedInPath := strings.Replace(inPath, "gressGateways.", "gressGateways."+fmt.Sprint(index)+".", 1)
+		scope.Debugf("Checking for path %s in IstioOperatorSpec", renderedInPath)
 
-		m, found, err := getK8SSpecFromIOP(iop, componentName, inPath, addonName)
+		m, found, err := getK8SSpecFromIOP(iop, componentName, renderedInPath, addonName)
 		if err != nil {
 			return "", err
 		}
 		if !found {
-			scope.Debugf("path %s not found in IstioOperatorSpec, skip mapping.", inPath)
+			scope.Debugf("path %s not found in IstioOperatorSpec, skip mapping.", renderedInPath)
 			continue
 		}
 		if mstr, ok := m.(string); ok && mstr == "" {
-			scope.Debugf("path %s is empty string, skip mapping.", inPath)
+			scope.Debugf("path %s is empty string, skip mapping.", renderedInPath)
 			continue
 		}
 		// Zero int values are due to proto3 compiling to scalars rather than ptrs. Skip these because values of 0 are
 		// the default in destination fields and need not be set explicitly.
 		if mint, ok := util.ToIntValue(m); ok && mint == 0 {
-			scope.Debugf("path %s is int 0, skip mapping.", inPath)
+			scope.Debugf("path %s is int 0, skip mapping.", renderedInPath)
 			continue
 		}
 		if componentName == name.IstioBaseComponentName {
 			return "", fmt.Errorf("base component can only have k8s.overlays, not other K8s settings")
 		}
+		// for server-side apply, make sure service port has protocol defined.
+		// TODO(richardwxn): remove after https://github.com/kubernetes-sigs/structured-merge-diff/issues/130 is fixed.
+		if strings.HasSuffix(inPath, "Service") {
+			if msvc, ok := m.(*v1alpha1.ServiceSpec); ok {
+				for _, port := range msvc.Ports {
+					if port.Protocol == "" {
+						port.Protocol = "TCP"
+					}
+				}
+			}
+		}
+
 		outPath, err := t.renderResourceComponentPathTemplate(v.OutPath, componentName, resourceName, addonName, iop.Revision)
 		if err != nil {
 			return "", err
@@ -346,9 +305,7 @@ func (t *Translator) TranslateHelmValues(iop *v1alpha1.IstioOperatorSpec, compon
 		return "", err
 	}
 
-	if devDbg {
-		scope.Infof("Values translated from IstioOperator API:\n%s", apiValsStr)
-	}
+	scope.Debugf("Values translated from IstioOperator API:\n%s", apiValsStr)
 
 	// Add global overlay from IstioOperatorSpec.Values/UnvalidatedValues.
 	_, err = tpath.SetFromPath(iop, "Values", &globalVals)
@@ -359,10 +316,10 @@ func (t *Translator) TranslateHelmValues(iop *v1alpha1.IstioOperatorSpec, compon
 	if err != nil {
 		return "", err
 	}
-	if devDbg {
-		scope.Infof("Values from IstioOperatorSpec.Values:\n%s", util.ToYAML(globalVals))
-		scope.Infof("Values from IstioOperatorSpec.UnvalidatedValues:\n%s", util.ToYAML(globalUnvalidatedVals))
-	}
+
+	scope.Debugf("Values from IstioOperatorSpec.Values:\n%s", util.ToYAML(globalVals))
+	scope.Debugf("Values from IstioOperatorSpec.UnvalidatedValues:\n%s", util.ToYAML(globalUnvalidatedVals))
+
 	mergedVals, err := util.OverlayTrees(apiVals, globalVals)
 	if err != nil {
 		return "", err

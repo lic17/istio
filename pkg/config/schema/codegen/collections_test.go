@@ -85,6 +85,8 @@ import (
 	"istio.io/istio/pkg/config/schema/collection"
 	"istio.io/istio/pkg/config/schema/resource"
 	"istio.io/istio/pkg/config/validation"
+    "reflect"
+	githubcomgogoprotobuftypes "github.com/gogo/protobuf/types"
 )
 
 var (
@@ -100,6 +102,7 @@ var (
 			Plural: "barkinds",
 			Version: "v1",
 			Proto: "google.protobuf.Struct",
+			ReflectType: reflect.TypeOf(&githubcomgogoprotobuftypes.Struct{}).Elem(),
 			ProtoPackage: "github.com/gogo/protobuf/types",
 			ClusterScoped: false,
 			ValidateProto: validation.EmptyValidate,
@@ -117,6 +120,7 @@ var (
 			Plural: "fookinds",
 			Version: "v1",
 			Proto: "google.protobuf.Struct",
+			ReflectType: reflect.TypeOf(&githubcomgogoprotobuftypes.Struct{}).Elem(),
 			ProtoPackage: "github.com/gogo/protobuf/types",
 			ClusterScoped: true,
 			ValidateProto: validation.EmptyValidate,
@@ -145,6 +149,10 @@ var (
 	// PilotServiceApi contains only collections used by Pilot, including experimental Service Api.
 	PilotServiceApi = collection.NewSchemasBuilder().
 		Build()
+
+	// Deprecated contains only collections used by that will soon be used by nothing.
+	Deprecated = collection.NewSchemasBuilder().
+		Build()
 )
 `,
 		},
@@ -152,7 +160,7 @@ var (
 
 	for _, c := range cases {
 		t.Run("", func(t *testing.T) {
-			g := NewGomegaWithT(t)
+			g := NewWithT(t)
 
 			s, err := StaticCollections(c.packageName, c.m)
 			if c.err != "" {

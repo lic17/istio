@@ -41,8 +41,6 @@ export REPO_ROOT=/work
     -u "${UID}:${DOCKER_GID}" \
     --sig-proxy=true \
     ${DOCKER_SOCKET_MOUNT:--v /var/run/docker.sock:/var/run/docker.sock} \
-    -v /etc/passwd:/etc/passwd:ro \
-    -v /etc/group:/etc/group:ro \
     $CONTAINER_OPTIONS \
     --env-file <(env | grep -v ${ENV_BLOCKLIST}) \
     -e IN_BUILD_CONTAINER=1 \
@@ -50,5 +48,6 @@ export REPO_ROOT=/work
     --mount "type=bind,source=${PWD},destination=/work,consistency=cached" \
     --mount "type=volume,source=go,destination=/go,consistency=cached" \
     --mount "type=volume,source=gocache,destination=/gocache,consistency=cached" \
+    --mount "type=volume,source=cache,destination=/home/.cache,consistency=cached" \
     ${CONDITIONAL_HOST_MOUNTS} \
     -w /work "${IMG}" "$@"

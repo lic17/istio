@@ -53,6 +53,10 @@ type Settings struct {
 	// This should not be depended on as a primary means for reducing test flakes.
 	Retries int
 
+	// If enabled, namespaces will be reused rather than created with dynamic names each time.
+	// This is useful when combined with NoCleanup, to allow quickly iterating on tests.
+	StableNamespaces bool
+
 	// The label selector that the user has specified.
 	SelectorString string
 
@@ -62,6 +66,10 @@ type Settings struct {
 	// EnvironmentFactory allows caller to override the environment creation. If nil, a default is used based
 	// on the known environment names.
 	EnvironmentFactory EnvironmentFactory
+
+	// The revision label on a namespace for injection webhook.
+	// If set to XXX, all the namespaces created with istio-injection=enabled will be replaced with istio.io/rev=XXX.
+	Revision string
 }
 
 // RunDir is the name of the dir to output, for this particular run.
@@ -101,5 +109,8 @@ func (s *Settings) String() string {
 	result += fmt.Sprintf("BaseDir:           %s\n", s.BaseDir)
 	result += fmt.Sprintf("Selector:          %v\n", s.Selector)
 	result += fmt.Sprintf("FailOnDeprecation: %v\n", s.FailOnDeprecation)
+	result += fmt.Sprintf("CIMode:            %v\n", s.CIMode)
+	result += fmt.Sprintf("Retries:           %v\n", s.Retries)
+	result += fmt.Sprintf("StableNamespaces:  %v\n", s.StableNamespaces)
 	return result
 }

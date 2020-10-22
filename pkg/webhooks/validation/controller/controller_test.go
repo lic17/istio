@@ -36,10 +36,9 @@ import (
 	ktesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 
-	"istio.io/pkg/filewatcher"
-
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/testcerts"
+	"istio.io/pkg/filewatcher"
 )
 
 var (
@@ -258,7 +257,7 @@ func reconcileHelper(t *testing.T, c *fakeController) {
 }
 
 func TestGreenfield(t *testing.T) {
-	g := NewGomegaWithT(t)
+	g := NewWithT(t)
 	c := createTestController(t)
 
 	// install adds the webhook config with fail open policy
@@ -300,7 +299,7 @@ func TestGreenfield(t *testing.T) {
 }
 
 func TestCABundleChange(t *testing.T) {
-	g := NewGomegaWithT(t)
+	g := NewWithT(t)
 	c := createTestController(t)
 
 	_, _ = c.ValidatingWebhookConfigurations().Create(context.TODO(), unpatchedWebhookConfig, kubeApiMeta.CreateOptions{})

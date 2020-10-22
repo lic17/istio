@@ -31,8 +31,10 @@ egressGateways:
       ports:
       - name: http2
         port: 80
+        targetPort: 8080
       - name: https
         port: 443
+        targetPort: 8443
       - name: tls
         port: 15443
         targetPort: 15443
@@ -77,6 +79,9 @@ ingressGateways:
       - name: https
         port: 443
         targetPort: 8443
+      - name: tcp-istiod
+        port: 15012
+        targetPort: 15012
       - name: tls
         port: 15443
         targetPort: 15443
@@ -108,66 +113,6 @@ pilot:
       initialDelaySeconds: 1
       periodSeconds: 3
       timeoutSeconds: 5
-    strategy:
-      rollingUpdate:
-        maxSurge: 100%
-        maxUnavailable: 25%
-policy:
-  enabled: false
-  k8s:
-    env:
-    - name: POD_NAMESPACE
-      valueFrom:
-        fieldRef:
-          apiVersion: v1
-          fieldPath: metadata.namespace
-    hpaSpec:
-      maxReplicas: 5
-      metrics:
-      - resource:
-          name: cpu
-          targetAverageUtilization: 80
-        type: Resource
-      minReplicas: 1
-      scaleTargetRef:
-        apiVersion: apps/v1
-        kind: Deployment
-        name: istio-policy
-    strategy:
-      rollingUpdate:
-        maxSurge: 100%
-        maxUnavailable: 25%
-telemetry:
-  enabled: false
-  k8s:
-    env:
-    - name: POD_NAMESPACE
-      valueFrom:
-        fieldRef:
-          apiVersion: v1
-          fieldPath: metadata.namespace
-    - name: GOMAXPROCS
-      value: "6"
-    hpaSpec:
-      maxReplicas: 5
-      metrics:
-      - resource:
-          name: cpu
-          targetAverageUtilization: 80
-        type: Resource
-      minReplicas: 1
-      scaleTargetRef:
-        apiVersion: apps/v1
-        kind: Deployment
-        name: istio-telemetry
-    replicaCount: 1
-    resources:
-      limits:
-        cpu: 4800m
-        memory: 4G
-      requests:
-        cpu: 1000m
-        memory: 1G
     strategy:
       rollingUpdate:
         maxSurge: 100%

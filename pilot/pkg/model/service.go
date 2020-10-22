@@ -33,7 +33,6 @@ import (
 	"github.com/mitchellh/copystructure"
 
 	"istio.io/api/label"
-
 	"istio.io/istio/pilot/pkg/util/sets"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/host"
@@ -54,7 +53,7 @@ import (
 // listens on ports 80, 8080
 type Service struct {
 	// Attributes contains additional attributes associated with the service
-	// used mostly by mixer and RBAC for policy enforcement purposes.
+	// used mostly by RBAC for policy enforcement purposes.
 	Attributes ServiceAttributes
 
 	// Ports is the set of network ports where the service is listening for
@@ -245,6 +244,7 @@ func (instance *ServiceInstance) DeepCopy() *ServiceInstance {
 }
 
 type WorkloadInstance struct {
+	Name      string            `json:"name,omitempty"`
 	Namespace string            `json:"namespace,omitempty"`
 	Endpoint  *IstioEndpoint    `json:"endpoint,omitempty"`
 	PortMap   map[string]uint32 `json:"portMap,omitempty"`
@@ -257,13 +257,14 @@ func (instance *WorkloadInstance) DeepCopy() *WorkloadInstance {
 		pmap[k] = v
 	}
 	return &WorkloadInstance{
+		Name:      instance.Name,
 		Namespace: instance.Namespace,
 		PortMap:   pmap,
 		Endpoint:  instance.Endpoint.DeepCopy(),
 	}
 }
 
-// a custom comparison of foreign service instances based on the fields that we need
+// a custom comparison of workload instances based on the fields that we need
 // i.e. excluding the ports. Returns true if equal, false otherwise.
 func WorkloadInstancesEqual(first, second *WorkloadInstance) bool {
 	if first.Endpoint == nil || second.Endpoint == nil {
@@ -290,10 +291,10 @@ func WorkloadInstancesEqual(first, second *WorkloadInstance) bool {
 	if first.Endpoint.LbWeight != second.Endpoint.LbWeight {
 		return false
 	}
-	if first.Endpoint.UID != second.Endpoint.UID {
+	if first.Namespace != second.Namespace {
 		return false
 	}
-	if first.Namespace != second.Namespace {
+	if first.Name != second.Name {
 		return false
 	}
 	if !portMapEquals(first.PortMap, second.PortMap) {
@@ -329,6 +330,19 @@ func GetLocalityLabelOrDefault(label, defaultLabel string) string {
 	return defaultLabel
 }
 
+// SplitLocalityLabel splits a locality label into region, zone and subzone strings.
+func SplitLocalityLabel(locality string) (region, zone, subzone string) {
+	items := strings.Split(locality, "/")
+	switch len(items) {
+	case 1:
+		return items[0], "", ""
+	case 2:
+		return items[0], items[1], ""
+	default:
+		return items[0], items[1], items[2]
+	}
+}
+
 // Locality information for an IstioEndpoint
 type Locality struct {
 	// Label for locality on the endpoint. This is a "/" separated string.
@@ -351,9 +365,9 @@ type Locality struct {
 // port 80 are forwarded to port 55446, and connections to port 8080 are
 // forwarded to port 33333,
 //
-// then internally, we have two two endpoint structs for the
+// then internally, we have two endpoint structs for the
 // service catalog.mystore.com
-//  --> 172.16.0.1:54546 (with ServicePort pointing to 80) and
+//  --> 172.16.0.1:55446 (with ServicePort pointing to 80) and
 //  --> 172.16.0.1:33333 (with ServicePort pointing to 8080)
 //
 // TODO: Investigate removing ServiceInstance entirely.
@@ -366,9 +380,6 @@ type IstioEndpoint struct {
 
 	// ServicePortName tracks the name of the port, this is used to select the IstioEndpoint by service port.
 	ServicePortName string
-
-	// UID identifies the workload, for telemetry purpose.
-	UID string
 
 	// EnvoyEndpoint is a cached LbEndpoint, converted from the data, to
 	// avoid recomputation
@@ -392,6 +403,12 @@ type IstioEndpoint struct {
 
 	// TLSMode endpoint is injected with istio sidecar and ready to configure Istio mTLS
 	TLSMode string
+
+	// Namespace that this endpont belongs to. This is for telemetry purpose.
+	Namespace string
+
+	// Name of the workload that this endpoint belongs to. This is for telemetry purpose.
+	WorkloadName string
 }
 
 // ServiceAttributes represents a group of custom attributes of the service.
@@ -404,6 +421,8 @@ type ServiceAttributes struct {
 	Name string
 	// Namespace is "destination.service.namespace" attribute
 	Namespace string
+	// Labels applied to the service
+	Labels map[string]string
 	// UID is "destination.service.uid" attribute
 	UID string
 	// ExportTo defines the visibility of Service in
@@ -461,7 +480,7 @@ type ServiceDiscovery interface {
 	// CDS (clusters.go) calls it for building 'dnslb' type clusters.
 	// EDS calls it for building the endpoints result.
 	// Consult istio-dev before using this for anything else (except debugging/tools)
-	InstancesByPort(svc *Service, servicePort int, labels labels.Collection) ([]*ServiceInstance, error)
+	InstancesByPort(svc *Service, servicePort int, labels labels.Collection) []*ServiceInstance
 
 	// GetProxyServiceInstances returns the service instances that co-located with a given Proxy
 	//
@@ -480,14 +499,17 @@ type ServiceDiscovery interface {
 	// though with a different ServicePort and IstioEndpoint for each.  If any of these overlapping
 	// services are not HTTP or H2-based, behavior is undefined, since the listener may not be able to
 	// determine the intended destination of a connection without a Host header on the request.
-	GetProxyServiceInstances(*Proxy) ([]*ServiceInstance, error)
+	GetProxyServiceInstances(*Proxy) []*ServiceInstance
 
-	GetProxyWorkloadLabels(*Proxy) (labels.Collection, error)
+	GetProxyWorkloadLabels(*Proxy) labels.Collection
 
 	// GetIstioServiceAccounts returns a list of service accounts looked up from
 	// the specified service hostname and ports.
 	// Deprecated - service account tracking moved to XdsServer, incremental.
 	GetIstioServiceAccounts(svc *Service, ports []int) []string
+
+	// NetworkGateways returns a map of network name to Gateways that can be used to access that network.
+	NetworkGateways() map[string][]*Gateway
 }
 
 // GetNames returns port names
@@ -575,12 +597,9 @@ func ParseSubsetKey(s string) (direction TrafficDirection, subsetName string, ho
 }
 
 // GetServiceAddressForProxy returns a Service's IP address specific to the cluster where the node resides
-func (s *Service) GetServiceAddressForProxy(node *Proxy) string {
-	// todo reduce unnecessary locking
-	s.Mutex.RLock()
-	defer s.Mutex.RUnlock()
-	if node.Metadata != nil && node.Metadata.ClusterID != "" && s.ClusterVIPs[node.Metadata.ClusterID] != "" {
-		return s.ClusterVIPs[node.Metadata.ClusterID]
+func (s *Service) GetServiceAddressForProxy(node *Proxy, push *PushContext) string {
+	if node.Metadata != nil && node.Metadata.ClusterID != "" && push.ServiceIndex.ClusterVIPs[s][node.Metadata.ClusterID] != "" {
+		return push.ServiceIndex.ClusterVIPs[s][node.Metadata.ClusterID]
 	}
 	if node.Metadata != nil && node.Metadata.DNSCapture != "" &&
 		s.Address == constants.UnspecifiedIP && s.AutoAllocatedAddress != "" {
@@ -610,11 +629,7 @@ func GetServiceAccounts(svc *Service, ports []int, discovery ServiceDiscovery) [
 	// Get the service accounts running service within Kubernetes. This is reflected by the pods that
 	// the service is deployed on, and the service accounts of the pods.
 	for _, port := range ports {
-		svcInstances, err := discovery.InstancesByPort(svc, port, labels.Collection{})
-		if err != nil {
-			log.Warnf("InstancesByPort(%s:%d) error: %v", svc.Hostname, port, err)
-			return nil
-		}
+		svcInstances := discovery.InstancesByPort(svc, port, labels.Collection{})
 		instances = append(instances, svcInstances...)
 	}
 

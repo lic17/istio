@@ -32,14 +32,9 @@ import (
 	"istio.io/istio/operator/cmd/mesh"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/xds"
+	"istio.io/istio/pkg/proxy"
 	istioVersion "istio.io/pkg/version"
 )
-
-type sidecarSyncStatus struct {
-	// nolint: structcheck, unused
-	pilot string
-	xds.SyncStatus
-}
 
 func newVersionCommand() *cobra.Command {
 	profileCmd := mesh.ProfileCmd()
@@ -93,39 +88,8 @@ func getRemoteInfoWrapper(pc **cobra.Command, opts *clioptions.ControlPlaneOptio
 
 func getProxyInfoWrapper(opts *clioptions.ControlPlaneOptions) func() (*[]istioVersion.ProxyInfo, error) {
 	return func() (*[]istioVersion.ProxyInfo, error) {
-		return getProxyInfo(opts)
+		return proxy.GetProxyInfo(kubeconfig, configContext, opts.Revision, istioNamespace)
 	}
-}
-
-func getProxyInfo(opts *clioptions.ControlPlaneOptions) (*[]istioVersion.ProxyInfo, error) {
-	kubeClient, err := kubeClientWithRevision(kubeconfig, configContext, opts.Revision)
-	if err != nil {
-		return nil, err
-	}
-
-	// Ask Pilot for the Envoy sidecar sync status, which includes the sidecar version info
-	allSyncz, err := kubeClient.AllDiscoveryDo(context.TODO(), istioNamespace, "/debug/syncz")
-	if err != nil {
-		return nil, err
-	}
-
-	pi := []istioVersion.ProxyInfo{}
-	for _, syncz := range allSyncz {
-		var sss []*sidecarSyncStatus
-		err = json.Unmarshal(syncz, &sss)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, ss := range sss {
-			pi = append(pi, istioVersion.ProxyInfo{
-				ID:           ss.ProxyID,
-				IstioVersion: ss.SyncStatus.IstioVersion,
-			})
-		}
-	}
-
-	return &pi, nil
 }
 
 // xdsVersionCommand gets the Control Plane and Sidecar versions via XDS
@@ -148,24 +112,21 @@ func xdsVersionCommand() *cobra.Command {
 		}
 		return nil
 	}
-	versionCmd.Example = `# Retrieve version information directly from XDS, without security
-istioctl x version --xds-address localhost:15012
+	versionCmd.Example = `# Retrieve version information directly from the control plane, using token security
+# (This is the usual way to get the control plane version with an out-of-cluster control plane.)
+istioctl x version --xds-address istio.cloudprovider.example.com:15012
 
-# Retrieve version information directly from XDS, with security
-# (the certificates must be retrieved before this step)
-istioctl x version --xds-address localhost:15010 --cert-dir ~/.istio-certs
+# Retrieve version information via Kubernetes config, using token security
+# (This is the usual way to get the control plane version with an in-cluster control plane.)
+istioctl x version
 
-# Retrieve version information via XDS from all Istio pods in a Kubernetes cluster
-# (without security)
-istioctl x version --xds-port 15010
+# Retrieve version information directly from the control plane, using RSA certificate security
+# (Certificates must be obtained before this step.  The --cert-dir flag lets istioctl bypass the Kubernetes API server.)
+istioctl x version --xds-address istio.example.com:15012 --cert-dir ~/.istio-certs
 
-# Retrieve version information via XDS from all Istio pods in a Kubernetes cluster
-# (the certificates must be retrieved before this step)
-istioctl x version --cert-dir ~/.istio-certs
-
-# Retrieve version information via XDS from default control plane Istio pods
-# in a Kubernetes cluster, without security
-istioctl x version --xds-label istio.io/rev=default --xds-port 15010
+# Retrieve version information via XDS from specific control plane in multi-control plane in-cluster configuration
+# (Select a specific control plane in an in-cluster canary Istio configuration.)
+istioctl x version --xds-label istio.io/rev=default
 `
 
 	versionCmd.Flags().VisitAll(func(flag *pflag.Flag) {

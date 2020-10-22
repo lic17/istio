@@ -24,7 +24,6 @@ import (
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	meshapi "istio.io/api/mesh/v1alpha1"
-
 	"istio.io/istio/pilot/pkg/serviceregistry/kube"
 	"istio.io/istio/pkg/config/mesh"
 	kubelib "istio.io/istio/pkg/kube"
@@ -120,7 +119,7 @@ func setupFake(t *testing.T, client kubelib.Client) {
 	}
 }
 
-func makeStatusSyncer(t *testing.T) (*StatusSyncer, error) {
+func makeStatusSyncer(t *testing.T) *StatusSyncer {
 	m := mesh.DefaultMeshConfig()
 	m.IngressService = "istio-ingress"
 
@@ -130,16 +129,13 @@ func makeStatusSyncer(t *testing.T) (*StatusSyncer, error) {
 
 	client := kubelib.NewFakeClient()
 	setupFake(t, client)
-	sync, err := NewStatusSyncer(&m, client)
-	if err != nil {
-		return nil, err
-	}
+	sync := NewStatusSyncer(&m, client)
 	stop := make(chan struct{})
 	client.RunAndWait(stop)
 	t.Cleanup(func() {
 		close(stop)
 	})
-	return sync, nil
+	return sync
 }
 
 // setAndRestoreEnv set the envs with given value, and return the old setting.
@@ -212,11 +208,7 @@ func TestRunningAddresses(t *testing.T) {
 }
 
 func testRunningAddressesWithService(t *testing.T) {
-	syncer, err := makeStatusSyncer(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	syncer := makeStatusSyncer(t)
 	address, err := syncer.runningAddresses(testNamespace)
 	if err != nil {
 		t.Fatal(err)
@@ -228,11 +220,7 @@ func testRunningAddressesWithService(t *testing.T) {
 }
 
 func testRunningAddressesWithHostname(t *testing.T) {
-	syncer, err := makeStatusSyncer(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	syncer := makeStatusSyncer(t)
 	syncer.ingressService = "istio-ingress-hostname"
 
 	address, err := syncer.runningAddresses(testNamespace)
@@ -247,11 +235,7 @@ func testRunningAddressesWithHostname(t *testing.T) {
 
 func TestRunningAddressesWithPod(t *testing.T) {
 	ingressNamespace = "istio-system" // it is set in real pilot on newController.
-	syncer, err := makeStatusSyncer(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	syncer := makeStatusSyncer(t)
 	syncer.ingressService = ""
 
 	address, err := syncer.runningAddresses(ingressNamespace)

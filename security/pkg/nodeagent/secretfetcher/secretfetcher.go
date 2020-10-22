@@ -30,11 +30,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"istio.io/istio/pkg/security"
-
+	nodeagentutil "istio.io/istio/security/pkg/nodeagent/util"
 	"istio.io/pkg/env"
 	"istio.io/pkg/log"
-
-	nodeagentutil "istio.io/istio/security/pkg/nodeagent/util"
 )
 
 const (
@@ -79,9 +77,8 @@ var (
 
 // SecretFetcher fetches secret via watching k8s secrets or sending CSR to CA.
 type SecretFetcher struct {
-	// If UseCaClient is true, use caClient to send CSR to CA.
-	UseCaClient bool
-	CaClient    security.Client
+	// If CaClient is set, use caClient to send CSR to CA.
+	CaClient security.Client
 
 	// Controller and store for secret objects.
 	scrtController cache.Controller

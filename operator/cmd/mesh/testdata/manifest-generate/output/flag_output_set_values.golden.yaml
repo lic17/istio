@@ -20,7 +20,7 @@ spec:
     metadata:
       annotations:
         prometheus.io/path: /stats/prometheus
-        prometheus.io/port: "15090"
+        prometheus.io/port: "15020"
         prometheus.io/scrape: "true"
         sidecar.istio.io/inject: "false"
       labels:
@@ -76,7 +76,6 @@ spec:
         - --log_output_level=default:info
         - --serviceCluster
         - istio-ingressgateway
-        - --trust-domain=cluster.local
         env:
         - name: JWT_POLICY
           value: third-party-jwt
@@ -137,11 +136,8 @@ spec:
         - containerPort: 15021
         - containerPort: 8080
         - containerPort: 8443
-        - containerPort: 15443
-        - containerPort: 15011
         - containerPort: 15012
-        - containerPort: 8060
-        - containerPort: 8853
+        - containerPort: 15443
         - containerPort: 15090
           name: http-envoy-prom
           protocol: TCP
@@ -181,6 +177,8 @@ spec:
           readOnly: true
         - mountPath: /var/run/ingress_gateway
           name: gatewaysdsudspath
+        - mountPath: /var/lib/istio/data
+          name: istio-data
         - mountPath: /etc/istio/pod
           name: podinfo
         - mountPath: /etc/istio/ingressgateway-certs
@@ -212,6 +210,8 @@ spec:
         name: istio-envoy
       - emptyDir: {}
         name: gatewaysdsudspath
+      - emptyDir: {}
+        name: istio-data
       - name: istio-token
         projected:
           sources:

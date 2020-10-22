@@ -31,11 +31,9 @@ import (
 	listerv1beta1 "k8s.io/client-go/listers/networking/v1beta1"
 
 	meshconfig "istio.io/api/mesh/v1alpha1"
-
 	"istio.io/istio/pilot/pkg/serviceregistry/kube"
 	kubelib "istio.io/istio/pkg/kube"
-	queue2 "istio.io/istio/pkg/queue"
-
+	"istio.io/istio/pkg/queue"
 	"istio.io/pkg/log"
 )
 
@@ -53,7 +51,7 @@ type StatusSyncer struct {
 	// Name of service (ingressgateway default) to find the IP
 	ingressService string
 
-	queue         queue2.Instance
+	queue         queue.Instance
 	ingressLister listerv1beta1.IngressLister
 	podLister     listerv1.PodLister
 	serviceLister listerv1.ServiceLister
@@ -64,32 +62,29 @@ type StatusSyncer struct {
 func (s *StatusSyncer) Run(stopCh <-chan struct{}) {
 	go s.queue.Run(stopCh)
 	go s.runUpdateStatus(stopCh)
-	<-stopCh
 }
 
 // NewStatusSyncer creates a new instance
-func NewStatusSyncer(mesh *meshconfig.MeshConfig, client kubelib.Client) (*StatusSyncer, error) {
+func NewStatusSyncer(mesh *meshconfig.MeshConfig, client kubelib.Client) *StatusSyncer {
 
 	// we need to use the defined ingress class to allow multiple leaders
 	// in order to update information about ingress status
 	ingressClass, defaultIngressClass := convertIngressControllerMode(mesh.IngressControllerMode, mesh.IngressClass)
 
 	// queue requires a time duration for a retry delay after a handler error
-	queue := queue2.NewQueue(1 * time.Second)
+	q := queue.NewQueue(1 * time.Second)
 
-	st := StatusSyncer{
+	return &StatusSyncer{
 		client:              client,
 		ingressLister:       client.KubeInformer().Networking().V1beta1().Ingresses().Lister(),
 		podLister:           client.KubeInformer().Core().V1().Pods().Lister(),
 		serviceLister:       client.KubeInformer().Core().V1().Services().Lister(),
 		nodeLister:          client.KubeInformer().Core().V1().Nodes().Lister(),
-		queue:               queue,
+		queue:               q,
 		ingressClass:        ingressClass,
 		defaultIngressClass: defaultIngressClass,
 		ingressService:      mesh.IngressService,
 	}
-
-	return &st, nil
 }
 
 func (s *StatusSyncer) onEvent() error {
@@ -142,7 +137,7 @@ func (s *StatusSyncer) updateStatus(status []coreV1.LoadBalancerIngress) error {
 
 		if ingressSliceEqual(status, curIPs) {
 			log.Debugf("skipping update of Ingress %v/%v (no change)", currIng.Namespace, currIng.Name)
-			return nil
+			continue
 		}
 
 		currIng.Status.LoadBalancer.Ingress = status

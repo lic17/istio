@@ -23,16 +23,14 @@ import (
 	"github.com/golang/protobuf/ptypes"
 
 	networking "istio.io/api/networking/v1alpha3"
-
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
-	istionetworking "istio.io/istio/pilot/pkg/networking"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/envoyfilter"
 	istio_route "istio.io/istio/pilot/pkg/networking/core/v1alpha3/route"
-	"istio.io/istio/pilot/pkg/networking/plugin"
 	"istio.io/istio/pilot/pkg/networking/util"
 	"istio.io/istio/pilot/pkg/serviceregistry"
 	"istio.io/istio/pilot/pkg/util/sets"
+	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/host"
 	"istio.io/istio/pkg/config/protocol"
@@ -100,20 +98,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarInboundHTTPRouteConfig(
 		ValidateClusters: proto.BoolFalse,
 	}
 
-	in := &plugin.InputParams{
-		ListenerProtocol: istionetworking.ListenerProtocolHTTP,
-		Node:             node,
-		ServiceInstance:  instance,
-		Service:          instance.Service,
-		Port:             instance.ServicePort,
-		Push:             push,
-	}
-
-	for _, p := range configgen.Plugins {
-		p.OnInboundRouteConfiguration(in, r)
-	}
-
-	r = envoyfilter.ApplyRouteConfigurationPatches(networking.EnvoyFilter_SIDECAR_INBOUND, in.Node, in.Push, r)
+	r = envoyfilter.ApplyRouteConfigurationPatches(networking.EnvoyFilter_SIDECAR_INBOUND, node, push, r)
 	return r
 }
 
@@ -196,30 +181,13 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundHTTPRouteConfig(node *
 		ValidateClusters: proto.BoolFalse,
 	}
 
-	pluginParams := &plugin.InputParams{
-		ListenerProtocol: istionetworking.ListenerProtocolHTTP,
-		ListenerCategory: networking.EnvoyFilter_SIDECAR_OUTBOUND,
-		Node:             node,
-		Push:             push,
-		Port: &model.Port{
-			Name:     "",
-			Port:     listenerPort,
-			Protocol: protocol.HTTP,
-		},
-	}
-
-	// call plugins
-	for _, p := range configgen.Plugins {
-		p.OnOutboundRouteConfiguration(pluginParams, out)
-	}
-
 	return out
 }
 
 func (configgen *ConfigGeneratorImpl) buildSidecarOutboundVirtualHosts(node *model.Proxy, push *model.PushContext,
 	routeName string, listenerPort int) []*route.VirtualHost {
 
-	var virtualServices []model.Config
+	var virtualServices []config.Config
 	var services []*model.Service
 
 	// Get the services from the egress listener.  When sniffing is enabled, we send
@@ -255,7 +223,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundVirtualHosts(node *mod
 		} else if svcPort, exists := svc.Ports.GetByPort(listenerPort); exists {
 			nameToServiceMap[svc.Hostname] = &model.Service{
 				Hostname:     svc.Hostname,
-				Address:      svc.GetServiceAddressForProxy(node),
+				Address:      svc.GetServiceAddressForProxy(node, push),
 				MeshExternal: svc.MeshExternal,
 				Resolution:   svc.Resolution,
 				Ports:        []*model.Port{svcPort},
@@ -301,7 +269,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundVirtualHosts(node *mod
 
 			if duplicate {
 				// This means this virtual host has caused duplicate virtual host name/domain.
-				push.AddMetric(model.DuplicatedDomains, name, node, fmt.Sprintf("duplicate domain from virtual service: %s", name))
+				push.AddMetric(model.DuplicatedDomains, name, node.ID, fmt.Sprintf("duplicate domain from virtual service: %s", name))
 			}
 		}
 
@@ -309,7 +277,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundVirtualHosts(node *mod
 			name := domainName(string(svc.Hostname), virtualHostWrapper.Port)
 			duplicate := duplicateVirtualHost(name, vhosts)
 			if !duplicate {
-				domains := generateVirtualHostDomains(svc, virtualHostWrapper.Port, node)
+				domains := generateVirtualHostDomains(svc, virtualHostWrapper.Port, node, push)
 				dl := len(domains)
 				domains = dedupeDomains(domains, vhdomains)
 				if dl != len(domains) {
@@ -325,7 +293,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundVirtualHosts(node *mod
 
 			if duplicate {
 				// This means we have hit a duplicate virtual host name/ domain name.
-				push.AddMetric(model.DuplicatedDomains, name, node, fmt.Sprintf("duplicate domain from  service: %s", name))
+				push.AddMetric(model.DuplicatedDomains, name, node.ID, fmt.Sprintf("duplicate domain from  service: %s", name))
 			}
 		}
 
@@ -385,7 +353,7 @@ func getVirtualHostsForSniffedServicePort(vhosts []*route.VirtualHost, routeName
 
 // generateVirtualHostDomains generates the set of domain matches for a service being accessed from
 // a proxy node
-func generateVirtualHostDomains(service *model.Service, port int, node *model.Proxy) []string {
+func generateVirtualHostDomains(service *model.Service, port int, node *model.Proxy, push *model.PushContext) []string {
 	domains := []string{string(service.Hostname), domainName(string(service.Hostname), port)}
 	domains = append(domains, generateAltVirtualHosts(string(service.Hostname), port, node.DNSDomain)...)
 
@@ -396,7 +364,7 @@ func generateVirtualHostDomains(service *model.Service, port int, node *model.Pr
 		}
 	}
 
-	svcAddr := service.GetServiceAddressForProxy(node)
+	svcAddr := service.GetServiceAddressForProxy(node, push)
 	if len(svcAddr) > 0 && svcAddr != constants.UnspecifiedIP {
 		// add a vhost match for the IP (if its non CIDR)
 		cidr := util.ConvertAddressToCidr(svcAddr)
@@ -537,6 +505,22 @@ func buildCatchAllVirtualHost(node *model.Proxy) *route.VirtualHost {
 				nil, 0)
 		}
 
+		routeAction := &route.RouteAction{
+			ClusterSpecifier: &route.RouteAction_Cluster{Cluster: egressCluster},
+			// Disable timeout instead of assuming some defaults.
+			Timeout: notimeout,
+		}
+		if util.IsIstioVersionGE18(node) {
+			routeAction.MaxStreamDuration = &route.RouteAction_MaxStreamDuration{
+				MaxStreamDuration: notimeout,
+			}
+		} else {
+			// If not configured at all, the grpc-timeout header is not used and
+			// gRPC requests time out like any other requests using timeout or its default.
+			// nolint: staticcheck
+			routeAction.MaxGrpcTimeout = notimeout
+		}
+
 		return &route.VirtualHost{
 			Name:    util.Passthrough,
 			Domains: []string{"*"},
@@ -547,14 +531,7 @@ func buildCatchAllVirtualHost(node *model.Proxy) *route.VirtualHost {
 						PathSpecifier: &route.RouteMatch_Prefix{Prefix: "/"},
 					},
 					Action: &route.Route_Route{
-						Route: &route.RouteAction{
-							ClusterSpecifier: &route.RouteAction_Cluster{Cluster: egressCluster},
-							// Disable timeout instead of assuming some defaults.
-							Timeout: notimeout,
-							// If not configured at all, the grpc-timeout header is not used and
-							// gRPC requests time out like any other requests using timeout or its default.
-							MaxGrpcTimeout: notimeout,
-						},
+						Route: routeAction,
 					},
 				},
 			},

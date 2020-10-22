@@ -1,3 +1,4 @@
+// +build integ
 // Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,53 +22,38 @@ import (
 	"istio.io/istio/pkg/test"
 	"istio.io/istio/pkg/test/framework"
 	"istio.io/istio/pkg/test/framework/components/echo"
-	"istio.io/istio/pkg/test/framework/components/echo/echoboot"
-	"istio.io/istio/pkg/test/framework/components/namespace"
 	"istio.io/istio/pkg/test/framework/features"
 	"istio.io/istio/pkg/test/framework/label"
-	"istio.io/istio/pkg/test/framework/resource"
 )
 
 // TelemetryTest validates that source and destination labels are collected
 // for multicluster traffic.
-func TelemetryTest(t *testing.T, ns namespace.Instance, feature features.Feature) {
+func TelemetryTest(t *testing.T, apps AppContext, features ...features.Feature) {
 	framework.NewTest(t).
 		Label(label.Multicluster).
-		Features(feature).
+		Features(features...).
 		Run(func(ctx framework.TestContext) {
 			ctx.NewSubTest("telemetry").
 				Run(func(ctx framework.TestContext) {
-					clusters := ctx.Environment().Clusters()
-					services := map[resource.ClusterIndex][]*echo.Instance{}
-					builder := echoboot.NewBuilderOrFail(ctx, ctx)
-					for _, cluster := range clusters {
-						var instance echo.Instance
-						ref := &instance
-						svcName := fmt.Sprintf("echo-%d", cluster.Index())
-						builder = builder.With(ref, newEchoConfig(svcName, ns, cluster))
-						services[cluster.Index()] = append(services[cluster.Index()], ref)
-					}
-					builder.BuildOrFail(ctx)
+					for _, src := range ctx.Clusters() {
+						for _, dest := range ctx.Clusters() {
+							src, dest := src, dest
+							subTestName := fmt.Sprintf("%s->%s://%s:%s%s",
+								src.Name(),
+								"http",
+								dest.Name(),
+								"http",
+								"/")
 
-					for _, srcServices := range services {
-						for _, src := range srcServices {
-							for _, dstServices := range services {
-								src := *src
-								dest := *dstServices[0]
-								subTestName := fmt.Sprintf("%s->%s://%s:%s%s",
-									src.Config().Service,
-									"http",
-									dest.Config().Service,
-									"http",
-									"/")
+							ctx.NewSubTest(subTestName).
+								RunParallel(func(ctx framework.TestContext) {
+									src := apps.UniqueEchos.GetOrFail(ctx, echo.InCluster(src))
+									dest := apps.UniqueEchos.GetOrFail(ctx, echo.InCluster(dest))
 
-								ctx.NewSubTest(subTestName).
-									RunParallel(func(ctx framework.TestContext) {
-										_ = callOrFail(ctx, src, dest)
-										validateClusterLabelsInStats(src, t)
-										validateClusterLabelsInStats(dest, t)
-									})
-							}
+									callOrFail(ctx, src, dest, nil)
+									validateClusterLabelsInStats(src, ctx)
+									validateClusterLabelsInStats(dest, ctx)
+								})
 						}
 					}
 				})
@@ -88,12 +74,12 @@ func validateClusterLabelsInStats(svc echo.Instance, t test.Failer) {
 		for _, metric := range instances.Metric {
 			hasSourceCluster := false
 			hasDestinationCluster := false
-			for _, label := range metric.Label {
-				if label.GetName() == "source_cluster" {
+			for _, l := range metric.Label {
+				if l.GetName() == "source_cluster" {
 					hasSourceCluster = true
 					continue
 				}
-				if label.GetName() == "destination_cluster" {
+				if l.GetName() == "destination_cluster" {
 					hasDestinationCluster = true
 					continue
 				}

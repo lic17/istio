@@ -1,3 +1,4 @@
+// +build integ
 // Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -73,7 +74,7 @@ func (tc TestCase) CheckRBACRequest() error {
 			return getError(req, "allow with code 200", fmt.Sprintf("error: %v", err))
 		}
 	} else {
-		if req.Options.PortName == "tcp" || req.Options.PortName == "grpc" {
+		if strings.HasPrefix(req.Options.PortName, "tcp") || req.Options.PortName == "grpc" {
 			expectedErrMsg := "EOF" // TCP deny message.
 			if req.Options.PortName == "grpc" {
 				expectedErrMsg = "rpc error: code = PermissionDenied desc = RBAC: access denied"

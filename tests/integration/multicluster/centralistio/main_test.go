@@ -1,3 +1,4 @@
+// +build integ
 //  Copyright Istio Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,56 +18,42 @@ package centralistio
 import (
 	"testing"
 
-	"istio.io/istio/tests/integration/multicluster"
-
 	"istio.io/istio/pkg/test/framework"
 	"istio.io/istio/pkg/test/framework/components/environment/kube"
 	"istio.io/istio/pkg/test/framework/components/istio"
-	"istio.io/istio/pkg/test/framework/components/namespace"
-	"istio.io/istio/pkg/test/framework/components/pilot"
 	"istio.io/istio/pkg/test/framework/label"
 	"istio.io/istio/pkg/test/framework/resource"
+	"istio.io/istio/tests/integration/multicluster"
 )
 
 var (
-	ist                              istio.Instance
-	pilots                           []pilot.Instance
-	clusterLocalNS, mcReachabilityNS namespace.Instance
-	controlPlaneValues               string
+	ist    istio.Instance
+	appCtx multicluster.AppContext
 )
 
 func TestMain(m *testing.M) {
 	framework.
 		NewSuite(m).
-		Label(label.Multicluster).
+		Label(label.Multicluster, label.Flaky).
 		RequireMinClusters(2).
-		Setup(multicluster.Setup(&controlPlaneValues, &clusterLocalNS, &mcReachabilityNS)).
-		Setup(kube.Setup(func(s *kube.Settings) {
-			// Make CentralIstiod run on first cluster, all others are remotes which use centralIstiod's pilot
+		Setup(multicluster.Setup(&appCtx)).
+		Setup(kube.Setup(func(s *kube.Settings, ctx resource.Context) {
+			// Make externalIstiod run on first cluster, all others are remotes which use externalIstiod's pilot
 			s.ControlPlaneTopology = make(map[resource.ClusterIndex]resource.ClusterIndex)
 			primaryCluster := resource.ClusterIndex(0)
 			for i := 0; i < len(s.KubeConfig); i++ {
 				s.ControlPlaneTopology[resource.ClusterIndex(i)] = primaryCluster
 			}
 		})).
-		Setup(istio.Setup(&ist, func(cfg *istio.Config) {
+		Setup(istio.Setup(&ist, func(_ resource.Context, cfg *istio.Config) {
 
-			cfg.Values["global.centralIstiod"] = "true"
+			cfg.Values["global.externalIstiod"] = "true"
 
 			// Set the control plane values on the config.
-			cfg.ControlPlaneValues = controlPlaneValues + `
-  gateways:
-    istio-ingressgateway:
-      meshExpansionPorts:
-      - port: 15017
-        targetPort: 15017
-        name: tcp-webhook
-      - port: 15012
-        targetPort: 15012
-        name: tcp-istiod
+			// For ingress, add port 15017 to the default list of ports.
+			cfg.ControlPlaneValues = appCtx.ControlPlaneValues + `
   global:
-    centralIstiod: true
-    caAddress: istiod.istio-system.svc:15012`
+    externalIstiod: true`
 			cfg.RemoteClusterValues = `
 components:
   base:
@@ -74,35 +61,23 @@ components:
   pilot:
     enabled: false  
   istiodRemote:
-    enabled: true 
-  ingressGateways:
-  - name: istio-ingressgateway
     enabled: true
 values:
   global:
-    centralIstiod: true`
+    externalIstiod: true`
 		})).
-		Setup(func(ctx resource.Context) (err error) {
-			pilots = make([]pilot.Instance, len(ctx.Environment().Clusters()))
-			// All clusters talk to the same pilot
-			pilot, err := pilot.New(ctx, pilot.Config{
-				Cluster: ctx.Environment().Clusters()[0],
-			})
-			if err != nil {
-				return err
-			}
-			for i := 0; i < len(ctx.Environment().Clusters()); i++ {
-				pilots[i] = pilot
-			}
-			return nil
-		}).
+		Setup(multicluster.SetupApps(&appCtx)).
 		Run()
 }
 
 func TestMulticlusterReachability(t *testing.T) {
-	multicluster.ReachabilityTest(t, mcReachabilityNS, "installation.multicluster.central-istiod")
+	multicluster.ReachabilityTest(t, appCtx, "installation.multicluster.central-istiod")
+}
+
+func TestCrossClusterLoadbalancing(t *testing.T) {
+	multicluster.LoadbalancingTest(t, appCtx, "installation.multicluster.central-istiod")
 }
 
 func TestClusterLocalService(t *testing.T) {
-	multicluster.ClusterLocalTest(t, clusterLocalNS, "installation.multicluster.central-istiod")
+	multicluster.ClusterLocalTest(t, appCtx, "installation.multicluster.central-istiod")
 }

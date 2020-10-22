@@ -22,13 +22,11 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
 
-	"istio.io/pkg/log"
-
 	networking "istio.io/api/networking/v1alpha3"
-
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/util"
 	"istio.io/istio/pilot/pkg/util/runtime"
+	"istio.io/pkg/log"
 )
 
 const (
@@ -39,25 +37,61 @@ const (
 	VirtualInboundListenerName = "virtualInbound"
 )
 
+var (
+	// DeprecatedFilterNames is to support both canonical filter names
+	// and deprecated filter names for backward compatibility. Istiod
+	// generates canonical filter names.
+	DeprecatedFilterNames = map[string]string{
+		wellknown.Buffer:                      "envoy.buffer",
+		wellknown.CORS:                        "envoy.cors",
+		"envoy.filters.http.csrf":             "envoy.csrf",
+		wellknown.Dynamo:                      "envoy.http_dynamo_filter",
+		wellknown.HTTPExternalAuthorization:   "envoy.ext_authz",
+		wellknown.Fault:                       "envoy.fault",
+		wellknown.GRPCHTTP1Bridge:             "envoy.grpc_http1_bridge",
+		wellknown.GRPCJSONTranscoder:          "envoy.grpc_json_transcoder",
+		wellknown.GRPCWeb:                     "envoy.grpc_web",
+		wellknown.Gzip:                        "envoy.gzip",
+		wellknown.HealthCheck:                 "envoy.health_check",
+		wellknown.IPTagging:                   "envoy.ip_tagging",
+		wellknown.Lua:                         "envoy.lua",
+		wellknown.HTTPRateLimit:               "envoy.rate_limit",
+		wellknown.Router:                      "envoy.router",
+		wellknown.Squash:                      "envoy.squash",
+		wellknown.HttpInspector:               "envoy.listener.http_inspector",
+		wellknown.OriginalDestination:         "envoy.listener.original_dst",
+		"envoy.filters.listener.original_src": "envoy.listener.original_src",
+		wellknown.ProxyProtocol:               "envoy.listener.proxy_protocol",
+		wellknown.TlsInspector:                "envoy.listener.tls_inspector",
+		wellknown.ClientSSLAuth:               "envoy.client_ssl_auth",
+		wellknown.ExternalAuthorization:       "envoy.ext_authz",
+		wellknown.HTTPConnectionManager:       "envoy.http_connection_manager",
+		wellknown.MongoProxy:                  "envoy.mongo_proxy",
+		wellknown.RateLimit:                   "envoy.ratelimit",
+		wellknown.RedisProxy:                  "envoy.redis_proxy",
+		wellknown.TCPProxy:                    "envoy.tcp_proxy",
+	}
+)
+
 // ApplyListenerPatches applies patches to LDS output
 func ApplyListenerPatches(
 	patchContext networking.EnvoyFilter_PatchContext,
 	proxy *model.Proxy,
 	push *model.PushContext,
+	efw *model.EnvoyFilterWrapper,
 	listeners []*xdslistener.Listener,
 	skipAdds bool) (out []*xdslistener.Listener) {
-	defer runtime.HandleCrash(func() {
+	defer runtime.HandleCrash(runtime.LogPanic, func(interface{}) {
 		log.Errorf("listeners patch caused panic, so the patches did not take effect")
 	})
 	// In case the patches cause panic, use the listeners generated before to reduce the influence.
 	out = listeners
 
-	envoyFilterWrapper := push.EnvoyFilters(proxy)
-	if envoyFilterWrapper == nil {
+	if efw == nil {
 		return
 	}
 
-	return doListenerListOperation(patchContext, envoyFilterWrapper, listeners, skipAdds)
+	return doListenerListOperation(patchContext, efw, listeners, skipAdds)
 }
 
 func doListenerListOperation(
@@ -252,6 +286,23 @@ func doNetworkFilterListOperation(patchContext networking.EnvoyFilter_PatchConte
 			fc.Filters = append(fc.Filters, clonedVal)
 			copy(fc.Filters[insertPosition+1:], fc.Filters[insertPosition:])
 			fc.Filters[insertPosition] = clonedVal
+		} else if cp.Operation == networking.EnvoyFilter_Patch_REPLACE {
+			if !hasNetworkFilterMatch(cp) {
+				continue
+			}
+			// find the matching filter first
+			replacePosition := -1
+			for i := 0; i < len(fc.Filters); i++ {
+				if networkFilterMatch(fc.Filters[i], cp) {
+					replacePosition = i
+					break
+				}
+			}
+			if replacePosition == -1 {
+				log.Debugf("EnvoyFilter patch %v is not applied because no matching network filter found.", cp)
+				continue
+			}
+			fc.Filters[replacePosition] = proto.Clone(cp.Value).(*xdslistener.Filter)
 		}
 	}
 	if networkFiltersRemoved {
@@ -403,6 +454,27 @@ func doHTTPFilterListOperation(patchContext networking.EnvoyFilter_PatchContext,
 			hcm.HttpFilters = append(hcm.HttpFilters, clonedVal)
 			copy(hcm.HttpFilters[insertPosition+1:], hcm.HttpFilters[insertPosition:])
 			hcm.HttpFilters[insertPosition] = clonedVal
+		} else if cp.Operation == networking.EnvoyFilter_Patch_REPLACE {
+			if !hasHTTPFilterMatch(cp) {
+				continue
+			}
+
+			// find the matching filter first
+			replacePosition := -1
+			for i := 0; i < len(hcm.HttpFilters); i++ {
+				if httpFilterMatch(hcm.HttpFilters[i], cp) {
+					replacePosition = i
+					break
+				}
+			}
+
+			if replacePosition == -1 {
+				log.Debugf("EnvoyFilter patch %v is not applied because no matching HTTP filter found.", cp)
+				continue
+			}
+
+			clonedVal := proto.Clone(cp.Value).(*http_conn.HttpFilter)
+			hcm.HttpFilters[replacePosition] = clonedVal
 		}
 	}
 	if httpFiltersRemoved {
@@ -570,7 +642,8 @@ func networkFilterMatch(filter *xdslistener.Filter, cp *model.EnvoyFilterConfigP
 		return true
 	}
 
-	return cp.Match.GetListener().FilterChain.Filter.Name == filter.Name
+	return cp.Match.GetListener().FilterChain.Filter.Name == filter.Name ||
+		cp.Match.GetListener().FilterChain.Filter.Name == DeprecatedFilterNames[filter.Name]
 }
 
 func hasHTTPFilterMatch(cp *model.EnvoyFilterConfigPatchWrapper) bool {
@@ -590,7 +663,7 @@ func httpFilterMatch(filter *http_conn.HttpFilter, cp *model.EnvoyFilterConfigPa
 
 	match := cp.Match.GetListener().FilterChain.Filter.SubFilter
 
-	return match.Name == filter.Name
+	return match.Name == filter.Name || match.Name == DeprecatedFilterNames[filter.Name]
 }
 
 func patchContextMatch(patchContext networking.EnvoyFilter_PatchContext,

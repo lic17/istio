@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-
 	"gopkg.in/yaml.v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,6 +30,7 @@ import (
 
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/xds"
+	"istio.io/istio/pkg/config"
 )
 
 func NewIstioContext(stop <-chan struct{}) context.Context {
@@ -95,7 +95,7 @@ func (r *Reporter) Start(clientSet kubernetes.Interface, namespace string, store
 	r.client = clientSet.CoreV1().ConfigMaps(namespace)
 	r.cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   (r.PodName + "-distribution"),
+			Name:   r.PodName + "-distribution",
 			Labels: map[string]string{labelKey: "true"},
 		},
 		Data: make(map[string]string),
@@ -189,7 +189,7 @@ func (r *Reporter) removeCompletedResource(completedResources []Resource) {
 
 // This function must be called every time a resource change is detected by pilot.  This allows us to lookup
 // only the resources we expect to be in flight, not the ones that have already distributed
-func (r *Reporter) AddInProgressResource(res model.Config) {
+func (r *Reporter) AddInProgressResource(res config.Config) {
 	myRes := ResourceFromModelConfig(res)
 	if myRes == nil {
 		scope.Errorf("Unable to locate schema for %v, will not update status.", res)
@@ -203,7 +203,7 @@ func (r *Reporter) AddInProgressResource(res model.Config) {
 	}
 }
 
-func (r *Reporter) DeleteInProgressResource(res model.Config) {
+func (r *Reporter) DeleteInProgressResource(res config.Config) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.inProgressResources, res.Key())
@@ -249,7 +249,7 @@ type distributionEvent struct {
 }
 
 func (r *Reporter) QueryLastNonce(conID string, distributionType xds.EventType) (noncePrefix string) {
-	key := conID + string(distributionType)
+	key := conID + distributionType
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.status[key]
@@ -259,6 +259,12 @@ func (r *Reporter) QueryLastNonce(conID string, distributionType xds.EventType) 
 // Theoretically, we could use the ads connections themselves to harvest this data,
 // but the mutex there is pretty hot, and it seems best to trade memory for time.
 func (r *Reporter) RegisterEvent(conID string, distributionType xds.EventType, nonce string) {
+	// Skip unsupported event types. This ensures we do not leak memory for types
+	// which may not be handled properly. For example, a type not in AllEventTypes
+	// will not be properly unregistered.
+	if _, f := xds.AllEventTypes[distributionType]; !f {
+		return
+	}
 	d := distributionEvent{nonce: nonce, distributionType: distributionType, conID: conID}
 	select {
 	case r.distributionEventQueue <- d:
@@ -275,11 +281,12 @@ func (r *Reporter) readFromEventQueue() {
 	}
 
 }
+
 func (r *Reporter) processEvent(conID string, distributionType xds.EventType, nonce string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.dirty = true
-	key := conID + string(distributionType) // TODO: delimit?
+	key := conID + distributionType // TODO: delimit?
 	r.deleteKeyFromReverseMap(key)
 	var version string
 	if len(nonce) > 12 {
@@ -314,7 +321,7 @@ func (r *Reporter) RegisterDisconnect(conID string, types []xds.EventType) {
 	defer r.mu.Unlock()
 	r.dirty = true
 	for _, xdsType := range types {
-		key := conID + string(xdsType) // TODO: delimit?
+		key := conID + xdsType // TODO: delimit?
 		r.deleteKeyFromReverseMap(key)
 		delete(r.status, key)
 	}

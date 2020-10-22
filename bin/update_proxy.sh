@@ -15,7 +15,12 @@
 # limitations under the License.
 
 # Update the Proxy SHA in istio.deps with the first argument
+# Exit immediately for non zero status
 set -e
+# Check unset variables
+set -u
+# Print commands
+set -x
 
 UPDATE_BRANCH=${UPDATE_BRANCH:-"master"}
 
@@ -23,4 +28,28 @@ SCRIPTPATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ROOTDIR=$(dirname "${SCRIPTPATH}")
 cd "${ROOTDIR}"
 
+# Wait for the proxy to become available
+ISTIO_ENVOY_VERSION=${ISTIO_ENVOY_VERSION:-$1}
+ISTIO_ENVOY_LINUX_VERSION=${ISTIO_ENVOY_LINUX_VERSION:-${ISTIO_ENVOY_VERSION}}
+ISTIO_ENVOY_BASE_URL=${ISTIO_ENVOY_BASE_URL:-https://storage.googleapis.com/istio-build/proxy}
+ISTIO_ENVOY_RELEASE_URL=${ISTIO_ENVOY_RELEASE_URL:-${ISTIO_ENVOY_BASE_URL}/envoy-alpha-${ISTIO_ENVOY_LINUX_VERSION}.tar.gz}
+SLEEP_TIME=60
+
+printf "Verifying %s is available\n" "$ISTIO_ENVOY_RELEASE_URL"
+until curl --output /dev/null --silent --head --fail "$ISTIO_ENVOY_RELEASE_URL"; do
+    printf '.'
+    sleep $SLEEP_TIME
+done
+printf '\n'
+
+plugin=metadata_exchange
+WASM_URL=${ISTIO_ENVOY_BASE_URL}/${plugin}-${ISTIO_ENVOY_VERSION}.wasm
+printf "Verifying %s is available\n" "$WASM_URL"
+until curl --output /dev/null --silent --head --fail "$WASM_URL"; do
+    printf '.'
+    sleep $SLEEP_TIME
+done
+printf '\n'
+
+# Update the dependency in istio.deps
 sed -i '/PROXY_REPO_SHA/,/lastStableSHA/ { s/"lastStableSHA":.*/"lastStableSHA": "'"$1"'"/  }' istio.deps

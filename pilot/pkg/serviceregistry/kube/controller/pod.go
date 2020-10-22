@@ -126,6 +126,7 @@ func (pc *PodCache) onEvent(curr interface{}, ev model.Event) error {
 		for _, handler := range pc.c.workloadHandlers {
 			ep := NewEndpointBuilder(pc.c, pod).buildIstioEndpoint(ip, 0, "")
 			handler(&model.WorkloadInstance{
+				Name:      pod.Name,
 				Namespace: pod.Namespace,
 				Endpoint:  ep,
 				PortMap:   getPortMap(pod),
@@ -170,6 +171,7 @@ func (pc *PodCache) update(ip, key string) {
 		for ep := range endpointsToUpdate {
 			pc.queueEndpointEvent(ep)
 		}
+		endpointsPendingPodUpdate.Record(float64(len(pc.needResync)))
 	}
 
 	pc.proxyUpdates(ip)
