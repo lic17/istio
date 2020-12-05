@@ -1,3 +1,4 @@
+// +build !agent
 // Copyright Istio Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -100,7 +101,7 @@ func NewConfigGenTest(t test.Failer, opts TestOptions) *ConfigGenTest {
 	})
 
 	configs := getConfigs(t, opts)
-	configStore := memory.MakeWithLedger(collections.Pilot, &model.DisabledLedger{}, true)
+	configStore := memory.MakeSkipValidation(collections.Pilot, true)
 
 	cc := memory.NewSyncController(configStore)
 	controllers := []model.ConfigStoreCache{cc}
@@ -143,7 +144,7 @@ func NewConfigGenTest(t test.Failer, opts TestOptions) *ConfigGenTest {
 	env.NetworksWatcher = opts.NetworksWatcher
 
 	if opts.Plugins == nil {
-		opts.Plugins = registry.NewPlugins([]string{plugin.Authn, plugin.Authz})
+		opts.Plugins = registry.NewPlugins([]string{plugin.AuthzCustom, plugin.Authn, plugin.Authz})
 	}
 
 	fake := &ConfigGenTest{
@@ -199,7 +200,9 @@ func (f *ConfigGenTest) SetupProxy(p *model.Proxy) *model.Proxy {
 		p.Metadata = &model.NodeMetadata{}
 	}
 	if p.Metadata.IstioVersion == "" {
-		p.Metadata.IstioVersion = "1.8.0"
+		p.Metadata.IstioVersion = "1.9.0"
+	}
+	if p.IstioVersion == nil {
 		p.IstioVersion = model.ParseIstioVersion(p.Metadata.IstioVersion)
 	}
 	if p.Type == "" {
@@ -207,6 +210,9 @@ func (f *ConfigGenTest) SetupProxy(p *model.Proxy) *model.Proxy {
 	}
 	if p.ConfigNamespace == "" {
 		p.ConfigNamespace = "default"
+	}
+	if p.Metadata.Namespace == "" {
+		p.Metadata.Namespace = p.ConfigNamespace
 	}
 	if p.ID == "" {
 		p.ID = "app.test"

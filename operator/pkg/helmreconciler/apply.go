@@ -27,7 +27,6 @@ import (
 	util2 "k8s.io/kubectl/pkg/util"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"istio.io/istio/istioctl/pkg/install/k8sversion"
 	"istio.io/istio/operator/pkg/cache"
 	"istio.io/istio/operator/pkg/metrics"
 	"istio.io/istio/operator/pkg/name"
@@ -40,7 +39,7 @@ const fieldOwnerOperator = "istio-operator"
 
 // ApplyManifest applies the manifest to create or update resources. It returns the processed (created or updated)
 // objects and the number of objects in the manifests.
-func (h *HelmReconciler) ApplyManifest(manifest name.Manifest) (object.K8sObjects, int, error) {
+func (h *HelmReconciler) ApplyManifest(manifest name.Manifest, serverSideApply bool) (object.K8sObjects, int, error) {
 	var processedObjects object.K8sObjects
 	var deployedObjects int
 	var errs util.Errors
@@ -88,18 +87,6 @@ func (h *HelmReconciler) ApplyManifest(manifest name.Manifest) (object.K8sObject
 		scope.Infof("The following objects differ between generated manifest and cache: \n - %s", strings.Join(changedObjectKeys, "\n - "))
 	} else {
 		scope.Infof("Generated manifest objects are the same as cached for component %s.", cname)
-	}
-
-	// check minor version only
-	serverSideApply := false
-	if h.restConfig != nil {
-		k8sVer, err := k8sversion.GetKubernetesVersion(h.restConfig)
-		if err != nil {
-			scope.Errorf("failed to get k8s version: %s", err)
-		}
-		if k8sVer >= 16 {
-			serverSideApply = true
-		}
 	}
 
 	// Objects are applied in groups: namespaces, CRDs, everything else, with wait for ready in between.
@@ -193,7 +180,6 @@ func (h *HelmReconciler) ApplyObject(obj *unstructured.Unstructured, serverSideA
 	}
 
 	gvk := obj.GetObjectKind().GroupVersionKind()
-
 	if serverSideApply {
 		return h.serverSideApply(obj)
 	}
@@ -205,7 +191,7 @@ func (h *HelmReconciler) ApplyObject(obj *unstructured.Unstructured, serverSideA
 
 		switch {
 		case errors2.IsNotFound(err):
-			scope.Infof("creating resource: %s", objectStr)
+			scope.Infof("Creating %s (%s/%s)", objectStr, h.iop.Name, h.iop.Spec.Revision)
 			err = h.client.Create(context.TODO(), obj)
 			if err != nil {
 				return fmt.Errorf("failed to create %q: %w", objectStr, err)
@@ -215,7 +201,7 @@ func (h *HelmReconciler) ApplyObject(obj *unstructured.Unstructured, serverSideA
 				Increment()
 			return nil
 		case err == nil:
-			scope.Infof("updating resource: %s", objectStr)
+			scope.Infof("Updating %s (%s/%s)", objectStr, h.iop.Name, h.iop.Spec.Revision)
 			// The correct way to do this is with a server-side apply. However, this requires users to be running Kube 1.16.
 			// When we no longer support < 1.16 use the code described in the linked issue.
 			// https://github.com/kubernetes-sigs/controller-runtime/issues/347

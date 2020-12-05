@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	klabels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/informers"
 
@@ -55,7 +56,6 @@ import (
 	"istio.io/istio/pkg/config/schema/collections"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/queue"
-	"istio.io/pkg/ledger"
 	"istio.io/pkg/log"
 )
 
@@ -70,9 +70,6 @@ type Client struct {
 
 	// domainSuffix for the config metadata
 	domainSuffix string
-
-	// Ledger for tracking config distribution
-	configLedger ledger.Ledger
 
 	// revision for this control plane instance. We will only read configs that match this revision.
 	revision string
@@ -114,11 +111,11 @@ func (cl *Client) RegisterEventHandler(kind config.GroupVersionKind, handler fun
 // Run the queue and all informers. Callers should  wait for HasSynced() before depending on results.
 func (cl *Client) Run(stop <-chan struct{}) {
 	t0 := time.Now()
-	scope.Infoa("Starting Pilot K8S CRD controller")
+	scope.Info("Starting Pilot K8S CRD controller")
 
 	go func() {
 		cache.WaitForCacheSync(stop, cl.HasSynced)
-		scope.Infoa("Pilot K8S CRD controller synced ", time.Since(t0))
+		scope.Info("Pilot K8S CRD controller synced ", time.Since(t0))
 		cl.queue.Run(stop)
 	}()
 
@@ -136,11 +133,14 @@ func (cl *Client) HasSynced() bool {
 	return true
 }
 
-func New(client kube.Client, configLedger ledger.Ledger, revision string, options controller2.Options) (model.ConfigStoreCache, error) {
+func New(client kube.Client, revision string, options controller2.Options) (model.ConfigStoreCache, error) {
+	schemas := collections.Pilot
+	if features.EnableServiceApis {
+		schemas = collections.PilotServiceApi
+	}
 	out := &Client{
 		domainSuffix:      options.DomainSuffix,
-		configLedger:      configLedger,
-		schemas:           collections.PilotServiceApi,
+		schemas:           schemas,
 		revision:          revision,
 		queue:             queue.NewQueue(1 * time.Second),
 		kinds:             map[config.GroupVersionKind]*cacheHandler{},
@@ -355,6 +355,8 @@ func getObjectMetadata(config config.Config) metav1.ObjectMeta {
 		Labels:          config.Labels,
 		Annotations:     config.Annotations,
 		ResourceVersion: config.ResourceVersion,
+		OwnerReferences: config.OwnerReferences,
+		UID:             types.UID(config.UID),
 	}
 }
 

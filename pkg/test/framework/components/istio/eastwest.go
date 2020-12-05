@@ -42,24 +42,23 @@ var (
 )
 
 // deployEastWestGateway will create a separate gateway deployment for cross-cluster discovery or cross-network services.
-func (i *operatorComponent) deployEastWestGateway(cluster resource.Cluster) error {
+func (i *operatorComponent) deployEastWestGateway(cluster resource.Cluster, revision string) error {
 	imgSettings, err := image.SettingsFromCommandLine()
 	if err != nil {
 		return err
 	}
 
 	// generate istio operator yaml
-	cmd := exec.Command(genGatewayScript)
-	cmd.Env = os.Environ()
-	customEnv := []string{
-		"CLUSTER=" + cluster.Name(),
-		"NETWORK=" + cluster.NetworkName(),
-		"MESH=" + meshID,
+	args := []string{
+		"--cluster", cluster.Name(),
+		"--network", cluster.NetworkName(),
+		"--revision", revision,
+		"--mesh", meshID,
 	}
 	if !i.environment.IsMulticluster() {
-		customEnv = append(customEnv, "SINGLE_CLUSTER=1")
+		args = []string{"--single-cluster"}
 	}
-	cmd.Env = append(cmd.Env, customEnv...)
+	cmd := exec.Command(genGatewayScript, args...)
 	gwIOP, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed generating eastwestgateway operator yaml: %v", err)
@@ -122,7 +121,7 @@ func (i *operatorComponent) deployEastWestGateway(cluster resource.Cluster) erro
 	return nil
 }
 
-func (i *operatorComponent) applyCrossNetworkGateway(cluster resource.Cluster) error {
+func (i *operatorComponent) exposeUserServices(cluster resource.Cluster) error {
 	scopes.Framework.Infof("Exposing services via eastwestgateway in %v", cluster.Name())
 	return cluster.ApplyYAMLFiles(i.settings.SystemNamespace, exposeServicesGateway)
 }

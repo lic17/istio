@@ -15,14 +15,15 @@ spec:
   template:
     metadata:
       annotations:
+        kubectl.kubernetes.io/default-logs-container: hello
         prometheus.io/path: /stats/prometheus
         prometheus.io/port: "15020"
         prometheus.io/scrape: "true"
-        sidecar.istio.io/status: '{"version":"","initContainers":["istio-init"],"containers":["istio-proxy"],"volumes":["istio-envoy","istio-data","istio-podinfo","istio-token","istiod-ca-cert"],"imagePullSecrets":null}'
+        sidecar.istio.io/status: '{"initContainers":["istio-init"],"containers":["istio-proxy"],"volumes":["istio-envoy","istio-data","istio-podinfo","istio-token","istiod-ca-cert"],"imagePullSecrets":null}'
       creationTimestamp: null
       labels:
         app: hello
-        istio.io/rev: ""
+        istio.io/rev: default
         security.istio.io/tlsMode: istio
         service.istio.io/canonical-name: hello
         service.istio.io/canonical-revision: v1
@@ -85,7 +86,7 @@ spec:
               fieldPath: metadata.labels['service.istio.io/canonical-revision']
         - name: PROXY_CONFIG
           value: |
-            {"proxyMetadata":{"DNS_AGENT":""},"meshId":"cluster.local"}
+            {"proxyMetadata":{"DNS_AGENT":""}}
         - name: ISTIO_META_POD_PORTS
           value: |-
             [
@@ -103,6 +104,8 @@ spec:
           value: kubernetes://apis/apps/v1/namespaces/default/deployments/hello-v1
         - name: ISTIO_META_MESH_ID
           value: cluster.local
+        - name: TRUST_DOMAIN
+          value: cluster.local
         - name: DNS_AGENT
         image: gcr.io/istio-testing/proxyv2:latest
         imagePullPolicy: Always
@@ -118,6 +121,7 @@ spec:
             port: 15021
           initialDelaySeconds: 1
           periodSeconds: 2
+          timeoutSeconds: 3
         resources:
           limits:
             cpu: "2"
@@ -236,14 +240,15 @@ spec:
   template:
     metadata:
       annotations:
+        kubectl.kubernetes.io/default-logs-container: hello
         prometheus.io/path: /stats/prometheus
         prometheus.io/port: "15020"
         prometheus.io/scrape: "true"
-        sidecar.istio.io/status: '{"version":"","initContainers":["istio-init"],"containers":["istio-proxy"],"volumes":["istio-envoy","istio-data","istio-podinfo","istio-token","istiod-ca-cert"],"imagePullSecrets":null}'
+        sidecar.istio.io/status: '{"initContainers":["istio-init"],"containers":["istio-proxy"],"volumes":["istio-envoy","istio-data","istio-podinfo","istio-token","istiod-ca-cert"],"imagePullSecrets":null}'
       creationTimestamp: null
       labels:
         app: hello
-        istio.io/rev: ""
+        istio.io/rev: default
         security.istio.io/tlsMode: istio
         service.istio.io/canonical-name: hello
         service.istio.io/canonical-revision: v2
@@ -306,7 +311,7 @@ spec:
               fieldPath: metadata.labels['service.istio.io/canonical-revision']
         - name: PROXY_CONFIG
           value: |
-            {"proxyMetadata":{"DNS_AGENT":""},"meshId":"cluster.local"}
+            {"proxyMetadata":{"DNS_AGENT":""}}
         - name: ISTIO_META_POD_PORTS
           value: |-
             [
@@ -324,6 +329,8 @@ spec:
           value: kubernetes://apis/apps/v1/namespaces/default/deployments/hello-v2
         - name: ISTIO_META_MESH_ID
           value: cluster.local
+        - name: TRUST_DOMAIN
+          value: cluster.local
         - name: DNS_AGENT
         image: gcr.io/istio-testing/proxyv2:latest
         imagePullPolicy: Always
@@ -339,6 +346,7 @@ spec:
             port: 15021
           initialDelaySeconds: 1
           periodSeconds: 2
+          timeoutSeconds: 3
         resources:
           limits:
             cpu: "2"

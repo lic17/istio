@@ -43,6 +43,7 @@ This sample provides the following dashboards:
 * [Workload Dashboard](https://grafana.com/grafana/dashboards/7630) provides a detailed breakdown of metrics for a workload.
 * [Performance Dashboard](https://grafana.com/grafana/dashboards/11829) monitors the resource usage of the mesh.
 * [Control Plane Dashboard](https://grafana.com/grafana/dashboards/7645) monitors the health and performance of the control plane.
+* [WASM Extension Dashboard](https://grafana.com/grafana/dashboards/13277) provides an overview of mesh wide WebAssembly extension runtime and loading state.
 
 For more information about integrating with Grafana, please see the [Grafana integration page](https://istio.io/docs/ops/integrations/grafana/).
 
@@ -53,7 +54,7 @@ It helps you to understand the structure of your service mesh by inferring the t
 Kiali provides detailed metrics, and a basic [Grafana](#grafana) integration is available for advanced queries.
 Distributed tracing is provided by integrating [Jaeger](#jaeger).
 
-For more information about using Kiali, see the [Visualizing Your Mesh](istio.io/docs/tasks/observability/kiali/) task.
+For more information about using Kiali, see the [Visualizing Your Mesh](https://istio.io/docs/tasks/observability/kiali/) task.
 
 ### Jaeger
 

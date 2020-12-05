@@ -65,6 +65,21 @@ var (
 		monitoring.WithLabels(typeTag),
 	)
 
+	// Number of delayed pushes. Currently this happens only when the last push has not been ACKed
+	totalDelayedPushes = monitoring.NewSum(
+		"pilot_xds_delayed_pushes_total",
+		"Total number of XDS pushes that are delayed.",
+		monitoring.WithLabels(typeTag),
+	)
+
+	// Number of delayed pushes that we pushed prematurely as a failsafe.
+	// This indicates that either the failsafe timeout is too aggressive or there is a deadlock
+	totalDelayedPushTimeouts = monitoring.NewSum(
+		"pilot_xds_delayed_push_timeouts_total",
+		"Total number of XDS pushes that are delayed and timed out",
+		monitoring.WithLabels(typeTag),
+	)
+
 	xdsExpiredNonce = monitoring.NewSum(
 		"pilot_xds_expired_nonce",
 		"Total number of XDS requests with an expired nonce.",
@@ -120,7 +135,7 @@ var (
 	proxiesQueueTime = monitoring.NewDistribution(
 		"pilot_proxy_queue_time",
 		"Time in seconds, a proxy is in the push queue before being dequeued.",
-		[]float64{.1, 1, 3, 5, 10, 20, 30},
+		[]float64{.1, .5, 1, 3, 5, 10, 20, 30},
 	)
 
 	pushTriggers = monitoring.NewSum(
@@ -235,5 +250,7 @@ func init() {
 		inboundUpdates,
 		pushTriggers,
 		sendTime,
+		totalDelayedPushes,
+		totalDelayedPushTimeouts,
 	)
 }

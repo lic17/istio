@@ -112,9 +112,6 @@ type Options struct {
 	// ClusterID identifies the remote cluster in a multicluster env.
 	ClusterID string
 
-	// FetchCaRoot defines the function to get caRoot
-	FetchCaRoot func() map[string]string
-
 	// Metrics for capturing node-based metrics.
 	Metrics model.Metrics
 
@@ -131,14 +128,21 @@ type Options struct {
 	// EndpointMode decides what source to use to get endpoint information
 	EndpointMode EndpointMode
 
-	// CABundlePath defines the caBundle path for istiod Server
-	CABundlePath string
-
 	// Maximum QPS when communicating with kubernetes API
 	KubernetesAPIQPS float32
 
 	// Maximum burst for throttle when communicating with the kubernetes API
 	KubernetesAPIBurst int
+
+	// Duration to wait for cache syncs
+	SyncInterval time.Duration
+}
+
+func (o Options) GetSyncInterval() time.Duration {
+	if o.SyncInterval != 0 {
+		return o.SyncInterval
+	}
+	return time.Millisecond * 100
 }
 
 // EndpointMode decides what source to use to get endpoint information
@@ -248,6 +252,9 @@ type Controller struct {
 	networkGateways map[host.Name]map[string][]*model.Gateway
 
 	once sync.Once
+
+	// Duration to wait for cache syncs
+	syncInterval time.Duration
 }
 
 // NewController creates a new Kubernetes controller
@@ -270,6 +277,7 @@ func NewController(kubeClient kubelib.Client, options Options) *Controller {
 		networkGateways:             make(map[host.Name]map[string][]*model.Gateway),
 		networksWatcher:             options.NetworksWatcher,
 		metrics:                     options.Metrics,
+		syncInterval:                options.GetSyncInterval(),
 	}
 
 	if options.SystemNamespace != "" {
@@ -622,9 +630,7 @@ func (c *Controller) Run(stop <-chan struct{}) {
 	if c.nsInformer != nil {
 		go c.nsInformer.Run(stop)
 	}
-	// TODO(https://github.com/kubernetes/kubernetes/issues/95262) remove this
-	time.Sleep(time.Millisecond * 5)
-	cache.WaitForCacheSync(stop, c.HasSynced)
+	kubelib.WaitForCacheSyncInterval(stop, c.syncInterval, c.HasSynced)
 	c.queue.Run(stop)
 	log.Infof("Controller terminated")
 }
@@ -668,7 +674,9 @@ func (c *Controller) getPodLocality(pod *v1.Pod) string {
 	// https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#late-initialization
 	raw, err := c.nodeLister.Get(pod.Spec.NodeName)
 	if err != nil {
-		log.Warnf("unable to get node %q for pod %q: %v", pod.Spec.NodeName, pod.Name, err)
+		if pod.Spec.NodeName != "" {
+			log.Warnf("unable to get node %q for pod %q: %v", pod.Spec.NodeName, pod.Name, err)
+		}
 		return ""
 	}
 
@@ -834,9 +842,14 @@ func (c *Controller) GetProxyServiceInstances(proxy *model.Proxy) []*model.Servi
 		proxyIP := proxy.IPAddresses[0]
 
 		pod := c.pods.getPodByIP(proxyIP)
-		if workload, f := c.workloadInstancesByIP[proxyIP]; f {
+		c.RLock()
+		workload, f := c.workloadInstancesByIP[proxyIP]
+		c.RUnlock()
+		if f {
 			return c.hydrateWorkloadInstance(workload)
-		} else if pod != nil {
+		} else if pod != nil && !proxy.IsVM() {
+			// we don't want to use this block for our test "VM" which is actually a Pod.
+
 			if !c.isControllerForProxy(proxy) {
 				log.Errorf("proxy is in cluster %v, but controller is for cluster %v", proxy.Metadata.ClusterID, c.clusterID)
 				return nil
@@ -925,7 +938,7 @@ func (c *Controller) WorkloadInstanceHandler(si *model.WorkloadInstance, event m
 		delete(c.workloadInstancesByIP, si.Endpoint.Address)
 	default: // add or update
 		// Check to see if the workload entry changed. If it did, clear the old entry
-		k := si.Name + "~" + si.Namespace
+		k := si.Namespace + "/" + si.Name
 		existing := c.workloadInstancesIPsByName[k]
 		if existing != si.Endpoint.Address {
 			delete(c.workloadInstancesByIP, existing)
@@ -999,7 +1012,7 @@ func (c *Controller) onNamespaceEvent(obj interface{}, ev model.Event) error {
 // isControllerForProxy should be used for proxies assumed to be in the kube cluster for this controller. Workload Entries
 // may not necessarily pass this check, but we still want to allow kube services to select workload instances.
 func (c *Controller) isControllerForProxy(proxy *model.Proxy) bool {
-	return proxy.Metadata.ClusterID == c.clusterID
+	return proxy.Metadata.ClusterID == "" || proxy.Metadata.ClusterID == c.clusterID
 }
 
 // getProxyServiceInstancesFromMetadata retrieves ServiceInstances using proxy Metadata rather than
@@ -1048,10 +1061,18 @@ func (c *Controller) getProxyServiceInstancesFromMetadata(proxy *model.Proxy) ([
 			if !f {
 				return nil, fmt.Errorf("failed to get svc port for %v", port.Name)
 			}
-			portNum, err := findPortFromMetadata(port, proxy.Metadata.PodPorts)
-			if err != nil {
-				return nil, fmt.Errorf("failed to find target port for %v: %v", proxy.ID, err)
+
+			var portNum int
+			if len(proxy.Metadata.PodPorts) > 0 {
+				portNum, err = findPortFromMetadata(port, proxy.Metadata.PodPorts)
+				if err != nil {
+					return nil, fmt.Errorf("failed to find target port for %v: %v", proxy.ID, err)
+				}
+			} else {
+				// most likely a VM - we assume the WorkloadEntry won't remap any ports
+				portNum = port.TargetPort.IntValue()
 			}
+
 			// Dedupe the target ports here - Service might have configured multiple ports to the same target port,
 			// we will have to create only one ingress listener per port and protocol so that we do not endup
 			// complaining about listener conflicts.
@@ -1152,13 +1173,11 @@ func (c *Controller) GetIstioServiceAccounts(svc *model.Service, ports []int) []
 }
 
 // AppendServiceHandler implements a service catalog operation
-func (c *Controller) AppendServiceHandler(f func(*model.Service, model.Event)) error {
+func (c *Controller) AppendServiceHandler(f func(*model.Service, model.Event)) {
 	c.serviceHandlers = append(c.serviceHandlers, f)
-	return nil
 }
 
 // AppendWorkloadHandler implements a service catalog operation
-func (c *Controller) AppendWorkloadHandler(f func(*model.WorkloadInstance, model.Event)) error {
+func (c *Controller) AppendWorkloadHandler(f func(*model.WorkloadInstance, model.Event)) {
 	c.workloadHandlers = append(c.workloadHandlers, f)
-	return nil
 }

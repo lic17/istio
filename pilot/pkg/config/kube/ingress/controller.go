@@ -43,7 +43,6 @@ import (
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/queue"
 	"istio.io/pkg/env"
-	"istio.io/pkg/ledger"
 	"istio.io/pkg/log"
 )
 
@@ -160,19 +159,19 @@ func NewController(client kube.Client, meshWatcher mesh.Holder,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				q.Push(func() error {
-					return c.onEvent(obj, model.EventAdd)
+					return c.onEvent(nil, obj, model.EventAdd)
 				})
 			},
 			UpdateFunc: func(old, cur interface{}) {
 				if !reflect.DeepEqual(old, cur) {
 					q.Push(func() error {
-						return c.onEvent(cur, model.EventUpdate)
+						return c.onEvent(old, cur, model.EventUpdate)
 					})
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
 				q.Push(func() error {
-					return c.onEvent(obj, model.EventDelete)
+					return c.onEvent(nil, obj, model.EventDelete)
 				})
 			},
 		})
@@ -192,20 +191,57 @@ func (c *controller) shouldProcessIngress(mesh *meshconfig.MeshConfig, i *ingres
 	return shouldProcessIngressWithClass(mesh, i, class), nil
 }
 
-func (c *controller) onEvent(obj interface{}, event model.Event) error {
+// shouldProcessIngressUpdate checks whether we should renotify registered handlers about an update event
+func (c *controller) shouldProcessIngressUpdate(oldObj, curObj interface{}) (bool, error) {
+	var shouldProcess bool
+
+	// should always have curObj passed
+	ing, ok := curObj.(*ingress.Ingress)
+	if !ok {
+		return false, nil
+	}
+
+	if oldObj == nil { // corresponds to additions and deletions of ingresses, update handlers if the current version should be targeted
+		shouldProcessUpdate, err := c.shouldProcessIngress(c.meshWatcher.Mesh(), ing)
+		if err != nil {
+			return false, err
+		}
+		shouldProcess = shouldProcessUpdate
+	} else { // this case corresponds to an update to an existing ingress resource
+		oldIng, ok := oldObj.(*ingress.Ingress)
+		if !ok {
+			return false, nil
+		}
+
+		shouldProcessOld, err := c.shouldProcessIngress(c.meshWatcher.Mesh(), oldIng)
+		if err != nil {
+			return false, err
+		}
+		shouldProcessNew, err := c.shouldProcessIngress(c.meshWatcher.Mesh(), ing)
+		if err != nil {
+			return false, err
+		}
+
+		// the singular case we want to ignore is where neither the old nor new version of the ingress
+		// should be targeted. otherwise we need to delete the ingress routes, add the ingress routes,
+		// or change something about the ingress configuration
+		shouldProcess = shouldProcessOld || shouldProcessNew
+	}
+	return shouldProcess, nil
+}
+
+func (c *controller) onEvent(oldObj, curObj interface{}, event model.Event) error {
 	if !c.HasSynced() {
 		return errors.New("waiting till full synchronization")
 	}
 
-	ing, ok := obj.(*ingress.Ingress)
-	process, err := c.shouldProcessIngress(c.meshWatcher.Mesh(), ing)
+	shouldProcess, err := c.shouldProcessIngressUpdate(oldObj, curObj)
 	if err != nil {
 		return err
 	}
-	if !ok || !process {
+	if !shouldProcess {
 		return nil
 	}
-	log.Infof("ingress event %s for %s/%s", event, ing.Namespace, ing.Name)
 
 	// Trigger updates for Gateway and VirtualService
 	// TODO: we could be smarter here and only trigger when real changes were found
@@ -234,23 +270,6 @@ func (c *controller) RegisterEventHandler(kind config.GroupVersionKind, f func(c
 	case gvk.Gateway:
 		c.gatewayHandlers = append(c.gatewayHandlers, f)
 	}
-}
-
-func (c *controller) Version() string {
-	panic("implement me")
-}
-
-func (c *controller) GetResourceAtVersion(string, string) (resourceVersion string, err error) {
-	panic("implement me")
-}
-
-func (c *controller) GetLedger() ledger.Ledger {
-	log.Warnf("GetLedger: %s", errors.New("this operation is not supported by kube ingress controller"))
-	return nil
-}
-
-func (c *controller) SetLedger(ledger.Ledger) error {
-	return errors.New("this SetLedger operation is not supported by kube ingress controller")
 }
 
 func (c *controller) HasSynced() bool {

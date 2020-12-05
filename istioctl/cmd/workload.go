@@ -21,6 +21,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ghodss/yaml"
@@ -34,6 +35,7 @@ import (
 	clientv1alpha3 "istio.io/client-go/pkg/apis/networking/v1alpha3"
 	"istio.io/istio/istioctl/pkg/clioptions"
 	"istio.io/istio/istioctl/pkg/multicluster"
+	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/serviceregistry/kube/controller"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/schema/collections"
@@ -44,6 +46,7 @@ import (
 )
 
 var (
+	// TODO refactor away from package vars and add more UTs
 	tokenDuration  int64
 	name           string
 	serviceAccount string
@@ -51,6 +54,9 @@ var (
 	outputDir      string
 	clusterID      string
 	ingressIP      string
+	ingressSvc     string
+	autoRegister   bool
+	dnsCapture     bool
 	ports          []string
 )
 
@@ -216,7 +222,11 @@ Configure requires either the WorkloadGroup artifact path or its location on the
 	configureCmd.PersistentFlags().StringVarP(&outputDir, "output", "o", "", "Output directory for generated files")
 	configureCmd.PersistentFlags().StringVar(&clusterID, "clusterID", "Kubernetes", "The ID used to identify the cluster")
 	configureCmd.PersistentFlags().Int64Var(&tokenDuration, "tokenDuration", 3600, "The token duration in seconds (default: 1 hour)")
+	configureCmd.PersistentFlags().StringVar(&ingressSvc, "ingressService", multicluster.IstioEastWestGatewayServiceName, "Name of the Service to be"+
+		" used as the ingress gateway, in the format <service>.<namespace>. If no namespace is provided, the default "+istioNamespace+" namespace will be used.")
 	configureCmd.PersistentFlags().StringVar(&ingressIP, "ingressIP", "", "IP address of the ingress gateway")
+	configureCmd.PersistentFlags().BoolVar(&autoRegister, "autoregister", false, "Creates a WorkloadEntry upon connection to istiod (if enabled in pilot).")
+	configureCmd.PersistentFlags().BoolVar(&dnsCapture, "capture-dns", true, "Enables the capture of outgoing DNS packets on port 53, redirecting to istio-agent")
 	opts.AttachControlPlaneFlags(configureCmd)
 	return configureCmd
 }
@@ -280,11 +290,12 @@ func createClusterEnv(wg *clientv1alpha3.WorkloadGroup, dir string) error {
 
 	// default attributes and service name, namespace, ports, service account, service CIDR
 	clusterEnv := map[string]string{
-		"ISTIO_INBOUND_PORTS": portBehavior,
-		"ISTIO_NAMESPACE":     wg.Namespace,
-		"ISTIO_SERVICE":       fmt.Sprintf("%s.%s", wg.Name, wg.Namespace),
-		"ISTIO_SERVICE_CIDR":  "*",
-		"SERVICE_ACCOUNT":     we.ServiceAccount,
+		"ISTIO_INBOUND_PORTS":    portBehavior,
+		"ISTIO_NAMESPACE":        wg.Namespace,
+		"ISTIO_SERVICE":          fmt.Sprintf("%s.%s", wg.Name, wg.Namespace),
+		"ISTIO_SERVICE_CIDR":     "*",
+		"SERVICE_ACCOUNT":        we.ServiceAccount,
+		"ISTIO_META_DNS_CAPTURE": strconv.FormatBool(dnsCapture),
 	}
 	return ioutil.WriteFile(filepath.Join(dir, "cluster.env"), []byte(mapToString(clusterEnv)), filePerms)
 }
@@ -359,7 +370,6 @@ func createMeshConfig(kubeClient kube.ExtendedClient, wg *clientv1alpha3.Workloa
 	}
 	md := meshConfig.DefaultConfig.ProxyMetadata
 	md["CANONICAL_SERVICE"], md["CANONICAL_REVISION"] = inject.ExtractCanonicalServiceLabels(labels, wg.Name)
-	md["DNS_AGENT"] = ""
 	md["POD_NAMESPACE"] = wg.Namespace
 	md["SERVICE_ACCOUNT"] = we.ServiceAccount
 	md["TRUST_DOMAIN"] = meshConfig.TrustDomain
@@ -367,7 +377,7 @@ func createMeshConfig(kubeClient kube.ExtendedClient, wg *clientv1alpha3.Workloa
 	md["ISTIO_META_CLUSTER_ID"] = clusterID
 	md["ISTIO_META_MESH_ID"] = meshConfig.DefaultConfig.MeshId
 	md["ISTIO_META_NETWORK"] = we.Network
-	if portsJSON, err := json.Marshal(we.Ports); err == nil {
+	if portsJSON, err := json.Marshal(workloadEntryToPodPortsMeta(we.Ports)); err == nil {
 		md["ISTIO_META_POD_PORTS"] = string(portsJSON)
 	}
 	md["ISTIO_META_WORKLOAD_NAME"] = wg.Name
@@ -377,22 +387,50 @@ func createMeshConfig(kubeClient kube.ExtendedClient, wg *clientv1alpha3.Workloa
 		md["ISTIO_METAJSON_LABELS"] = string(labelsJSON)
 	}
 
-	proxyYAML, err := gogoprotomarshal.ToYAML(meshConfig.DefaultConfig)
+	if autoRegister {
+		md["ISTIO_META_AUTO_REGISTER_GROUP"] = wg.Name
+	}
+
+	proxyConfig, err := gogoprotomarshal.ToJSONMap(meshConfig.DefaultConfig)
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(filepath.Join(dir, "mesh.yaml"), []byte(proxyYAML), filePerms)
+
+	proxyYAML, err := yaml.Marshal(map[string]interface{}{"defaultConfig": proxyConfig})
+	if err != nil {
+		return err
+	}
+
+	return ioutil.WriteFile(filepath.Join(dir, "mesh.yaml"), proxyYAML, filePerms)
+}
+
+func workloadEntryToPodPortsMeta(p map[string]uint32) model.PodPortList {
+	var out model.PodPortList
+	for name, port := range p {
+		out = append(out, model.PodPort{Name: name, ContainerPort: int(port)})
+	}
+	return out
 }
 
 // Retrieves the external IP of the ingress-gateway for the hosts file additions
 func createHosts(kubeClient kube.ExtendedClient, ingressIP, dir string) error {
 	// try to infer the ingress IP if the provided one is invalid
 	if validation.ValidateIPAddress(ingressIP) != nil {
-		ingress, err := kubeClient.CoreV1().Services(istioNamespace).Get(context.Background(), multicluster.IstioIngressGatewayServiceName, metav1.GetOptions{})
-		if err == nil && ingress.Status.LoadBalancer.Ingress != nil && len(ingress.Status.LoadBalancer.Ingress) > 0 {
-			ingressIP = ingress.Status.LoadBalancer.Ingress[0].IP
+		p := strings.Split(ingressSvc, ".")
+		ingressNs := istioNamespace
+		if len(p) == 2 {
+			ingressSvc = p[0]
+			ingressNs = p[1]
 		}
-		// TODO: add case where the load balancer is a DNS name
+		ingress, err := kubeClient.CoreV1().Services(ingressNs).Get(context.Background(), ingressSvc, metav1.GetOptions{})
+		if err == nil {
+			if ingress.Status.LoadBalancer.Ingress != nil && len(ingress.Status.LoadBalancer.Ingress) > 0 {
+				ingressIP = ingress.Status.LoadBalancer.Ingress[0].IP
+			} else if len(ingress.Spec.ExternalIPs) > 0 {
+				ingressIP = ingress.Spec.ExternalIPs[0]
+			}
+			// TODO: add case where the load balancer is a DNS name
+		}
 	}
 
 	var hosts string

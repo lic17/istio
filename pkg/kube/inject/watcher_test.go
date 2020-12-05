@@ -22,7 +22,6 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
-	"gopkg.in/yaml.v2"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
@@ -49,9 +48,9 @@ func makeConfigMap(resourceVersion string, data map[string]string) *v1.ConfigMap
 }
 
 func TestNewConfigMapWatcher(t *testing.T) {
-	var c Config
 	configYaml := "policy: enabled"
-	if err := yaml.Unmarshal([]byte(configYaml), &c); err != nil {
+	c, err := UnmarshalConfig([]byte(configYaml))
+	if err != nil {
 		t.Fatal(err)
 	}
 	valuesConfig := "sidecarInjectorWebhook: {}"
@@ -87,6 +86,7 @@ func TestNewConfigMapWatcher(t *testing.T) {
 	go w.Run(stop)
 	controller := w.(*configMapWatcher).c
 	cache.WaitForCacheSync(stop, controller.HasSynced)
+	client.RunAndWait(stop)
 
 	cms := client.Kube().CoreV1().ConfigMaps(namespace)
 	steps := []struct {

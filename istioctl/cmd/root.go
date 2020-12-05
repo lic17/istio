@@ -51,7 +51,7 @@ const (
 	// Location to read istioctl defaults from
 	defaultIstioctlConfig = "$HOME/.istioctl/config.yaml"
 
-	//deprection messages to be suffixed to the deprecated commands
+	// deprecation messages to be suffixed to the deprecated commands
 	deprecatedMsg = "[Deprecated, it will be removed in Istio 1.9]"
 
 	// ExperimentalMsg indicate active development and not for production use warning.
@@ -172,7 +172,10 @@ debug and diagnose their Istio mesh.
 	rootCmd.AddCommand(registerCmd)
 	deprecate(deregisterCmd)
 	rootCmd.AddCommand(deregisterCmd)
-	rootCmd.AddCommand(injectCommand())
+
+	kubeInjectCmd := injectCommand()
+	hideInheritedFlags(kubeInjectCmd, "namespace")
+	rootCmd.AddCommand(kubeInjectCmd)
 
 	postInstallCmd := &cobra.Command{
 		Use:   "post-install",
@@ -217,6 +220,7 @@ debug and diagnose their Istio mesh.
 	rootCmd.AddCommand(experimentalCmd)
 	rootCmd.AddCommand(proxyConfig())
 	experimentalCmd.AddCommand(istiodConfig())
+	experimentalCmd.AddCommand(injectorCommand())
 
 	rootCmd.AddCommand(install.NewVerifyCommand())
 	experimentalCmd.AddCommand(install.NewPrecheckCommand())

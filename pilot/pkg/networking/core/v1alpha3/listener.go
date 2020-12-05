@@ -89,6 +89,11 @@ const (
 	// VirtualOutboundCatchAllTCPFilterChainName is the name of the catch all tcp filter chain
 	VirtualOutboundCatchAllTCPFilterChainName = "virtualOutbound-catchall-tcp"
 
+	// VirtualOutboundCatchAllTCPFilterChainName is the name of the filter chain to blackhole undesired traffic
+	VirtualOutboundBlackholeFilterChainName = "virtualOutbound-blackhole"
+	// VirtualInboundCatchAllTCPFilterChainName is the name of the filter chain to blackhole undesired traffic
+	VirtualInboundBlackholeFilterChainName = "virtualInbound-blackhole"
+
 	// VirtualInboundListenerName is the name for traffic capture listener
 	VirtualInboundListenerName = "virtualInbound"
 
@@ -466,8 +471,8 @@ func (configgen *ConfigGeneratorImpl) buildSidecarInboundHTTPListenerOptsForPort
 		// We use the port name as the subset in the inbound cluster for differentiation. Its fine to use port
 		// names here because the inbound clusters are not referred to anywhere in the API, unlike the outbound
 		// clusters and these are static endpoint clusters used only for sidecar (proxy -> app)
-		clusterName = model.BuildSubsetKey(model.TrafficDirectionInbound, pluginParams.ServiceInstance.ServicePort.Name,
-			pluginParams.ServiceInstance.Service.Hostname, pluginParams.ServiceInstance.ServicePort.Port)
+		clusterName = util.BuildInboundSubsetKey(node, pluginParams.ServiceInstance.ServicePort.Name,
+			pluginParams.ServiceInstance.Service.Hostname, pluginParams.ServiceInstance.ServicePort.Port, int(pluginParams.ServiceInstance.Endpoint.EndpointPort))
 	}
 
 	httpOpts := &httpListenerOpts{
@@ -509,8 +514,8 @@ func (configgen *ConfigGeneratorImpl) buildSidecarThriftListenerOptsForPortOrUDS
 	// We use the port name as the subset in the inbound cluster for differentiation. Its fine to use port
 	// names here because the inbound clusters are not referred to anywhere in the API, unlike the outbound
 	// clusters and these are static endpoint clusters used only for sidecar (proxy -> app)
-	clusterName := model.BuildSubsetKey(model.TrafficDirectionInbound, pluginParams.ServiceInstance.ServicePort.Name,
-		pluginParams.ServiceInstance.Service.Hostname, int(pluginParams.ServiceInstance.Endpoint.EndpointPort))
+	clusterName := util.BuildInboundSubsetKey(pluginParams.Node, pluginParams.ServiceInstance.ServicePort.Name,
+		pluginParams.ServiceInstance.Service.Hostname, pluginParams.ServiceInstance.ServicePort.Port, int(pluginParams.ServiceInstance.Endpoint.EndpointPort))
 
 	thriftOpts := &thriftListenerOpts{
 		transport:   thrift.TransportType_AUTO_TRANSPORT,
@@ -540,6 +545,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarInboundListenerForPortOrUDS(no
 		if old.instanceHostname != pluginParams.ServiceInstance.Service.Hostname {
 			// For sidecar specified listeners, the caller is expected to supply a dummy service instance
 			// with the right port and a hostname constructed from the sidecar config's name+namespace
+			// TODO everything in inbound listener is now workload oriented. We should no longer have listener conflicts.
 			pluginParams.Push.AddMetric(model.ProxyStatusConflictInboundListener, pluginParams.Node.ID, pluginParams.Node.ID,
 				fmt.Sprintf("Conflicting inbound listener:%d. existing: %s, incoming: %s", listenerOpts.port.Port,
 					old.instanceHostname, pluginParams.ServiceInstance.Service.Hostname))
@@ -552,11 +558,6 @@ func (configgen *ConfigGeneratorImpl) buildSidecarInboundListenerForPortOrUDS(no
 	for _, p := range configgen.Plugins {
 		chains := p.OnInboundFilterChains(pluginParams)
 		allChains = append(allChains, chains...)
-	}
-
-	if len(allChains) == 0 {
-		// add one empty entry to the list so we generate a default listener below
-		allChains = []istionetworking.FilterChain{{}}
 	}
 
 	tlsInspectorEnabled := false
@@ -628,7 +629,7 @@ allChainsLabel:
 
 		case istionetworking.ListenerProtocolTCP:
 			filterChainMatch = chain.FilterChainMatch
-			tcpNetworkFilters = buildInboundNetworkFilters(pluginParams.Push, pluginParams.ServiceInstance)
+			tcpNetworkFilters = buildInboundNetworkFilters(pluginParams.Push, pluginParams.ServiceInstance, node)
 
 		case istionetworking.ListenerProtocolAuto:
 			// Make sure id is not out of boundary of filterChainMatchOption
@@ -652,7 +653,7 @@ allChainsLabel:
 						chain.TLSContext.CommonTlsContext.AlpnProtocols, tcpMxcALPN)
 				}
 			} else {
-				tcpNetworkFilters = buildInboundNetworkFilters(pluginParams.Push, pluginParams.ServiceInstance)
+				tcpNetworkFilters = buildInboundNetworkFilters(pluginParams.Push, pluginParams.ServiceInstance, node)
 			}
 		default:
 			log.Warnf("Unsupported inbound protocol %v for port %#v", pluginParams.ListenerProtocol,
@@ -685,7 +686,7 @@ allChainsLabel:
 	}
 	// Filters are serialized one time into an opaque struct once we have the complete list.
 	if err := buildCompleteFilterChain(mutable, listenerOpts); err != nil {
-		log.Warna("buildSidecarInboundListeners ", err.Error())
+		log.Warn("buildSidecarInboundListeners ", err.Error())
 		return nil
 	}
 
@@ -1021,7 +1022,7 @@ func (configgen *ConfigGeneratorImpl) buildHTTPProxy(node *model.Proxy,
 		FilterChains: []istionetworking.FilterChain{{}},
 	}
 	if err := buildCompleteFilterChain(mutable, opts); err != nil {
-		log.Warna("buildHTTPProxy filter chain error  ", err.Error())
+		log.Warn("buildHTTPProxy filter chain error  ", err.Error())
 		return nil
 	}
 	return l
@@ -1345,6 +1346,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundListenerForPortOrUDS(n
 
 						// Support HTTP/1.0, HTTP/1.1 and HTTP/2
 						opt.match.ApplicationProtocols = append(opt.match.ApplicationProtocols, plaintextHTTPALPNs...)
+						opt.match.TransportProtocol = xdsfilters.RawBufferTransportProtocol
 					}
 
 					listenerOpts.needHTTPInspector = true
@@ -1419,6 +1421,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundListenerForPortOrUDS(n
 
 				// Support HTTP/1.0, HTTP/1.1 and HTTP/2
 				opt.match.ApplicationProtocols = append(opt.match.ApplicationProtocols, plaintextHTTPALPNs...)
+				opt.match.TransportProtocol = xdsfilters.RawBufferTransportProtocol
 			}
 
 			listenerOpts.filterChainOpts = append(listenerOpts.filterChainOpts, opts...)
@@ -1468,7 +1471,7 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundListenerForPortOrUDS(n
 
 	// Filters are serialized one time into an opaque struct once we have the complete list.
 	if err := buildCompleteFilterChain(mutable, listenerOpts); err != nil {
-		log.Warna("buildSidecarOutboundListeners: ", err.Error())
+		log.Warn("buildSidecarOutboundListeners: ", err.Error())
 		return
 	}
 
@@ -1704,7 +1707,7 @@ func buildHTTPConnectionManager(listenerOpts buildListenerOpts, httpOpts *httpLi
 		connectionManager.RouteSpecifier = &hcm.HttpConnectionManager_RouteConfig{RouteConfig: httpOpts.routeConfig}
 	}
 
-	accessLogBuilder.setHTTPAccessLog(listenerOpts.push.Mesh, connectionManager)
+	accessLogBuilder.setHTTPAccessLog(listenerOpts.push.Mesh, connectionManager, listenerOpts.proxy)
 
 	if listenerOpts.push.Mesh.EnableTracing {
 		proxyConfig := listenerOpts.proxy.Metadata.ProxyConfigOrDefault(listenerOpts.push.Mesh.DefaultConfig)
@@ -1727,13 +1730,51 @@ func buildTracingConfig(config *meshconfig.ProxyConfig) *hcm.HttpConnectionManag
 					Value: config.Tracing.MaxPathTagLength,
 				}
 		}
-
-		if len(config.Tracing.CustomTags) != 0 {
-			tracingCfg.CustomTags = buildCustomTags(config.Tracing.CustomTags)
-		}
+		tracingCfg.CustomTags = buildCustomTags(config.Tracing.CustomTags)
 	}
 
 	return tracingCfg
+}
+
+func defaultTags() []*tracing.CustomTag {
+	return []*tracing.CustomTag{
+		{
+			Tag: "istio.canonical_revision",
+			Type: &tracing.CustomTag_Environment_{
+				Environment: &tracing.CustomTag_Environment{
+					Name:         "CANONICAL_REVISION",
+					DefaultValue: "latest",
+				},
+			},
+		},
+		{
+			Tag: "istio.canonical_service",
+			Type: &tracing.CustomTag_Environment_{
+				Environment: &tracing.CustomTag_Environment{
+					Name:         "CANONICAL_SERVICE",
+					DefaultValue: "unknown",
+				},
+			},
+		},
+		{
+			Tag: "istio.mesh_id",
+			Type: &tracing.CustomTag_Environment_{
+				Environment: &tracing.CustomTag_Environment{
+					Name:         "ISTIO_META_MESH_ID",
+					DefaultValue: "unknown",
+				},
+			},
+		},
+		{
+			Tag: "istio.namespace",
+			Type: &tracing.CustomTag_Environment_{
+				Environment: &tracing.CustomTag_Environment{
+					Name:         "POD_NAMESPACE",
+					DefaultValue: "default",
+				},
+			},
+		},
+	}
 }
 
 func getPilotRandomSamplingEnv() float64 {
@@ -1767,7 +1808,13 @@ func updateTraceSamplingConfig(config *meshconfig.ProxyConfig, cfg *hcm.HttpConn
 }
 
 func buildCustomTags(customTags map[string]*meshconfig.Tracing_CustomTag) []*tracing.CustomTag {
+
 	var tags []*tracing.CustomTag
+
+	if features.EnableIstioTags {
+		defaultTags := defaultTags()
+		tags = append(tags, defaultTags...)
+	}
 
 	for tagName, tagInfo := range customTags {
 		switch tag := tagInfo.Type.(type) {
@@ -1963,7 +2010,7 @@ func buildListener(opts buildListenerOpts) *listener.Listener {
 		DeprecatedV1:    deprecatedV1,
 	}
 
-	accessLogBuilder.setListenerAccessLog(opts.push.Mesh, listener)
+	accessLogBuilder.setListenerAccessLog(opts.push.Mesh, listener, opts.proxy)
 
 	if opts.proxy.Type != model.Router {
 		listener.ListenerFiltersTimeout = gogo.DurationToProtoDuration(opts.push.Mesh.ProtocolDetectionTimeout)
@@ -1975,35 +2022,54 @@ func buildListener(opts buildListenerOpts) *listener.Listener {
 	return listener
 }
 
+func getMatchAllFilterChain(l *listener.Listener) (int, *listener.FilterChain) {
+	for i, fc := range l.FilterChains {
+		if isMatchAllFilterChain(fc) {
+			return i, fc
+		}
+	}
+	return 0, nil
+}
+
 // Create pass through filter chain for the listener assuming all the other filter chains are ready.
 // The match member of pass through filter chain depends on the existing non-passthrough filter chain.
 // TODO(lambdai): Calculate the filter chain match to replace the wildcard and replace appendListenerFallthroughRoute.
 func (configgen *ConfigGeneratorImpl) appendListenerFallthroughRouteForCompleteListener(l *listener.Listener, node *model.Proxy, push *model.PushContext) {
-	for _, fc := range l.FilterChains {
-		if isMatchAllFilterChain(fc) {
-			// We can only have one wildcard match. If the filter chain already has one, skip it
-			// This happens in the case of HTTP, which will get a fallthrough route added later,
-			// or TCP, which is not supported
-			return
-		}
+	matchIndex, matchAll := getMatchAllFilterChain(l)
+	if matchAll != nil && !util.IsIstioVersionGE18(node) {
+		// We can only have one wildcard match. If the filter chain already has one, skip it
+		// This happens in the case of HTTP, which will get a fallthrough route added later,
+		// or TCP, which is not supported
+		// This check is skipped for Proxy's newer than 1.8, as we can use DefaultFilterChain
+		return
 	}
 
 	fallthroughNetworkFilters := buildOutboundCatchAllNetworkFiltersOnly(push, node)
 
-	mutable := &istionetworking.MutableObjects{
-		FilterChains: []istionetworking.FilterChain{
-			{
-				TCP: fallthroughNetworkFilters,
-			},
-		},
-	}
-
 	outboundPassThroughFilterChain := &listener.FilterChain{
 		FilterChainMatch: &listener.FilterChainMatch{},
 		Name:             util.PassthroughFilterChain,
-		Filters:          mutable.FilterChains[0].TCP,
+		Filters:          fallthroughNetworkFilters,
 	}
-	l.FilterChains = append(l.FilterChains, outboundPassThroughFilterChain)
+
+	// On proxy 1.8+, we can set a default filter chain. This allows us to avoid issues where
+	// traffic starts to match a filter chain but then doesn't match latter criteria, leading to
+	// dropped requests. See https://github.com/istio/istio/issues/26079 for details.
+	if util.IsIstioVersionGE18(node) {
+		// If there are multiple filter chains and a match all chain, move it to DefaultFilterChain
+		// This ensures it will always be used as the fallback
+		if matchAll != nil && len(l.FilterChains) > 1 {
+			copy(l.FilterChains[matchIndex:], l.FilterChains[matchIndex+1:]) // Shift l.FilterChains[i+1:] left one index.
+			l.FilterChains[len(l.FilterChains)-1] = nil                      // Erase last element (write zero value).
+			l.FilterChains = l.FilterChains[:len(l.FilterChains)-1]          // Truncate slice.
+			l.DefaultFilterChain = matchAll
+		} else if matchAll == nil {
+			// Otherwise, if there is no match all already, set a passthrough match all
+			l.DefaultFilterChain = outboundPassThroughFilterChain
+		}
+	} else {
+		l.FilterChains = append(l.FilterChains, outboundPassThroughFilterChain)
+	}
 }
 
 // buildCompleteFilterChain adds the provided TCP and HTTP filters to the provided Listener and serializes them.

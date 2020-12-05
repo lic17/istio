@@ -39,12 +39,13 @@ This folder contains Istio integration tests that use the test framework checked
 The goal of the framework is to make it as easy as possible to author and run tests. In its simplest
 case, just typing ```go test ./...``` should be sufficient to run tests.
 
+This guide walks through the basics of writing tests with the Istio test framework. For best
+practices, see [Writing Good Integration Tests](https://github.com/istio/istio/wiki/Writing-Good-Integration-Tests).
+
 ## Writing Tests
 
 The test framework is designed to work with standard go tooling and allows developers
-to write environment-agnostics tests in a high-level fashion. The quickest way to get started with authoring
-new tests is to checkout the code in the
-[framework](https://github.com/istio/istio/tree/master/tests/integration/framework) folder.
+to write environment-agnostics tests in a high-level fashion.
 
 ### Adding a Test Suite
 
@@ -511,11 +512,6 @@ pass command-line flags to the test while running under the debugger, you can us
 
 ## Reference
 
-### Helm Values Overrides
-
-If your tests require special Helm values flags, you can specify your Helm values via additional
-for Kubernetes environments. See [mtls_healthcheck_test.go](security/healthcheck/mtls_healthcheck_test.go) for example.
-
 ### Command-Line Flags
 
 The test framework supports the following command-line flags:
@@ -543,7 +539,7 @@ The test framework supports the following command-line flags:
         Common image pull policy to use when deploying container images
 
   -istio.test.kube.config string
-        A comma-seperated list of paths to kube config files for cluster environments. (default ~/.kube/config)
+        A comma-separated list of paths to kube config files for cluster environments. (default ~/.kube/config)
 
   -istio.test.kube.deploy
         Deploy Istio into the target Kubernetes environment. (default true)
@@ -568,6 +564,9 @@ The test framework supports the following command-line flags:
 
   -istio.test.revision string
         Overwrite the default namespace label (istio-enabled=true) with revision lable (istio.io/rev=XXX). (default is no overwrite)
+
+  -istio.test.skipVM bool
+        Skip all the VM related parts in all the tests. (default is "false")
 ```
 
 }

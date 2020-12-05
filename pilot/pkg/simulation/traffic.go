@@ -132,6 +132,10 @@ func (c Call) FillDefaults() Call {
 	if c.TLS == "" {
 		c.TLS = Plaintext
 	}
+	if c.Address == "" {
+		// pick a random address, assumption is the test does not care
+		c.Address = "1.3.3.7"
+	}
 	return c
 }
 
@@ -239,7 +243,7 @@ func (sim *Simulation) Run(input Call) (result Result) {
 		}
 	}
 	_, hasTLSInspector := xdstest.ExtractListenerFilters(l)[xdsfilters.TLSInspector.Name]
-	fc, err := sim.matchFilterChain(l.FilterChains, input, hasTLSInspector)
+	fc, err := sim.matchFilterChain(l.FilterChains, l.DefaultFilterChain, input, hasTLSInspector)
 	if err != nil {
 		result.Error = err
 		return
@@ -381,7 +385,8 @@ func (sim *Simulation) matchVirtualHost(rc *route.RouteConfiguration, host strin
 // Envoy algorithm - at each level we will filter out all FilterChains that do
 // not match. This means an empty match (`{}`) may not match if another chain
 // matches one criteria but not another.
-func (sim *Simulation) matchFilterChain(chains []*listener.FilterChain, input Call, hasTLSInspector bool) (*listener.FilterChain, error) {
+func (sim *Simulation) matchFilterChain(chains []*listener.FilterChain, defaultChain *listener.FilterChain,
+	input Call, hasTLSInspector bool) (*listener.FilterChain, error) {
 	chains = filter(chains, func(fc *listener.FilterChainMatch) bool {
 		return fc.GetDestinationPort() == nil
 	}, func(fc *listener.FilterChainMatch) bool {
@@ -392,17 +397,18 @@ func (sim *Simulation) matchFilterChain(chains []*listener.FilterChain, input Ca
 	}, func(fc *listener.FilterChainMatch) bool {
 		ranger := cidranger.NewPCTrieRanger()
 		for _, a := range fc.GetPrefixRanges() {
-			_, cidr, err := net.ParseCIDR(fmt.Sprintf("%s/%d", a.AddressPrefix, a.GetPrefixLen().GetValue()))
+			s := fmt.Sprintf("%s/%d", a.AddressPrefix, a.GetPrefixLen().GetValue())
+			_, cidr, err := net.ParseCIDR(s)
 			if err != nil {
-				sim.t.Fatal(err)
+				sim.t.Fatalf("failed to parse cidr %v: %v", s, err)
 			}
 			if err := ranger.Insert(cidranger.NewBasicRangerEntry(*cidr)); err != nil {
-				sim.t.Fatal(err)
+				sim.t.Fatalf("failed to insert cidr %v: %v", cidr, err)
 			}
 		}
 		f, err := ranger.Contains(net.ParseIP(input.Address))
 		if err != nil {
-			sim.t.Fatal(err)
+			sim.t.Fatalf("cidr containers %v failed: %v", input.Address, err)
 		}
 		return f
 	})
@@ -442,6 +448,9 @@ func (sim *Simulation) matchFilterChain(chains []*listener.FilterChain, input Ca
 		return nil, ErrMultipleFilterChain
 	}
 	if len(chains) == 0 {
+		if defaultChain != nil {
+			return defaultChain, nil
+		}
 		return nil, ErrNoFilterChain
 	}
 	return chains[0], nil

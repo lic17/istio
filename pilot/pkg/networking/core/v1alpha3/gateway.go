@@ -46,7 +46,7 @@ import (
 
 func (configgen *ConfigGeneratorImpl) buildGatewayListeners(builder *ListenerBuilder) *ListenerBuilder {
 	if builder.node.MergedGateway == nil {
-		log.Debuga("buildGatewayListeners: no gateways for router ", builder.node.ID)
+		log.Debug("buildGatewayListeners: no gateways for router ", builder.node.ID)
 		return builder
 	}
 
@@ -78,6 +78,12 @@ func (configgen *ConfigGeneratorImpl) buildGatewayListeners(builder *ListenerBui
 		if si != nil && si.Endpoint != nil {
 			portNumber = si.Endpoint.EndpointPort
 		}
+		if builder.node.Metadata.UnprivilegedPod != "" && portNumber < 1024 {
+			log.Warnf("buildGatewayListeners: skipping privileged gateway port %d for node %s as it is an unprivileged pod",
+				portNumber, builder.node.ID)
+			continue
+		}
+
 		// on a given port, we can either have plain text HTTP servers or
 		// HTTPS/TLS servers with SNI. We cannot have a mix of http and https server on same port.
 		opts := buildListenerOpts{
@@ -148,7 +154,7 @@ func (configgen *ConfigGeneratorImpl) buildGatewayListeners(builder *ListenerBui
 		}
 		for _, p := range configgen.Plugins {
 			if err := p.OnOutboundListener(pluginParams, mutable); err != nil {
-				log.Warna("buildGatewayListeners: failed to build listener for gateway: ", err.Error())
+				log.Warn("buildGatewayListeners: failed to build listener for gateway: ", err.Error())
 			}
 		}
 
@@ -184,7 +190,7 @@ func (configgen *ConfigGeneratorImpl) buildGatewayHTTPRouteConfig(node *model.Pr
 	routeName string) *route.RouteConfiguration {
 
 	if node.MergedGateway == nil {
-		log.Debuga("buildGatewayRoutes: no gateways for router ", node.ID)
+		log.Debug("buildGatewayRoutes: no gateways for router ", node.ID)
 		return nil
 	}
 

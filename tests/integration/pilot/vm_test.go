@@ -19,14 +19,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"istio.io/client-go/pkg/apis/networking/v1alpha3"
-	"istio.io/istio/pilot/pkg/features"
 	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"istio.io/client-go/pkg/apis/networking/v1alpha3"
+	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/xds"
 	"istio.io/istio/pkg/test/framework"
 	"istio.io/istio/pkg/test/framework/components/echo"
@@ -97,9 +97,12 @@ func TestVMRegistrationLifecycle(t *testing.T) {
 				}).BuildOrFail(ctx)
 			ctx.NewSubTest("initial registration").Run(func(ctx framework.TestContext) {
 				retry.UntilSuccessOrFail(ctx, func() error {
-					_, err := client.Call(echo.CallOptions{Target: autoVM, Port: &autoVM.Config().Ports[0]})
-					return err
-				}, retry.Timeout(5*time.Second))
+					res, err := client.Call(echo.CallOptions{Target: autoVM, Port: &autoVM.Config().Ports[0]})
+					if err != nil {
+						return err
+					}
+					return res.CheckOK()
+				}, retry.Timeout(15*time.Second))
 			})
 			ctx.NewSubTest("reconnect reuses WorkloadEntry").Run(func(ctx framework.TestContext) {
 				// ensure we have two pilot instances, other tests can pass before the second one comes up
@@ -148,7 +151,7 @@ func TestVMRegistrationLifecycle(t *testing.T) {
 						return errors.New("expected 0 WorkloadEntries")
 					}
 					return nil
-				}, retry.Timeout(features.WorkloadEntryCleanupGracePeriod+(2*time.Second)))
+				}, retry.Timeout(2*features.WorkloadEntryCleanupGracePeriod+(2*time.Second)))
 			})
 		})
 }

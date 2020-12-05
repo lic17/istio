@@ -33,7 +33,6 @@ import (
 	"istio.io/istio/pkg/test/framework"
 	"istio.io/istio/pkg/test/framework/components/echo"
 	"istio.io/istio/pkg/test/framework/components/echo/echoboot"
-	"istio.io/istio/pkg/test/framework/components/environment/kube"
 	"istio.io/istio/pkg/test/framework/components/istioctl"
 	"istio.io/istio/pkg/test/framework/components/namespace"
 	kubetest "istio.io/istio/pkg/test/kube"
@@ -53,6 +52,7 @@ var (
    Port: auto-tcp-server 9093/UnsupportedProtocol targets pod port 16061
    Port: auto-http 81/UnsupportedProtocol targets pod port 18081
    Port: auto-grpc 7071/UnsupportedProtocol targets pod port 17071
+   Port: http-instance 82/HTTP targets pod port 18082
 80 DestinationRule: a\..* for "a"
    Matching subsets: v1
    No Traffic Policy
@@ -85,6 +85,12 @@ var (
 7071 DestinationRule: a\..* for "a"
    Matching subsets: v1
    No Traffic Policy
+82 DestinationRule: a\..* for "a"
+   Matching subsets: v1
+   No Traffic Policy
+82 VirtualService: a\..*
+   when headers are end-user=jason
+82 RBAC policies: ns\[.*\]-policy\[integ-test\]-rule\[0\]
 `)
 
 	describePodAOutput = regexp.MustCompile(`Service: a\..*
@@ -96,6 +102,7 @@ var (
    Port: auto-tcp-server 9093/UnsupportedProtocol targets pod port 16061
    Port: auto-http 81/UnsupportedProtocol targets pod port 18081
    Port: auto-grpc 7071/UnsupportedProtocol targets pod port 17071
+   Port: http-instance 82/HTTP targets pod port 18082
 80 DestinationRule: a\..* for "a"
    Matching subsets: v1
    No Traffic Policy
@@ -128,6 +135,12 @@ var (
 7071 DestinationRule: a\..* for "a"
    Matching subsets: v1
    No Traffic Policy
+82 DestinationRule: a\..* for "a"
+   Matching subsets: v1
+   No Traffic Policy
+82 VirtualService: a\..*
+   when headers are end-user=jason
+82 RBAC policies: ns\[.*\]-policy\[integ-test\]-rule\[0\]
 `)
 
 	addToMeshPodAOutput = `deployment .* updated successfully with Istio sidecar injected.
@@ -397,26 +410,35 @@ func TestProxyStatus(t *testing.T) {
 			// the printing code printed it.
 			g.Expect(output).To(gomega.ContainSubstring(fmt.Sprintf("%s.%s", podID, apps.Namespace.Name())))
 
-			args = []string{
-				"proxy-status", fmt.Sprintf("%s.%s", podID, apps.Namespace.Name())}
-			output, _ = istioCtl.InvokeOrFail(t, args)
-			g.Expect(output).To(gomega.ContainSubstring("Clusters Match"))
-			g.Expect(output).To(gomega.ContainSubstring("Listeners Match"))
-			g.Expect(output).To(gomega.ContainSubstring("Routes Match"))
+			expectSubstrings := func(have string, wants ...string) error {
+				for _, want := range wants {
+					if !strings.Contains(have, want) {
+						return fmt.Errorf("substring %q not found; have %q", want, have)
+					}
+				}
+				return nil
+			}
+
+			retry.UntilSuccessOrFail(t, func() error {
+				args = []string{
+					"proxy-status", fmt.Sprintf("%s.%s", podID, apps.Namespace.Name())}
+				output, _ = istioCtl.InvokeOrFail(t, args)
+				return expectSubstrings(output, "Clusters Match", "Listeners Match", "Routes Match")
+			})
 
 			// test the --file param
-			filename := "ps-configdump.json"
-			cs := ctx.Environment().(*kube.Environment).KubeClusters[0]
-			dump, err := cs.EnvoyDo(context.TODO(), podID, apps.Namespace.Name(), "GET", "config_dump", nil)
-			g.Expect(err).ShouldNot(gomega.HaveOccurred())
-			err = ioutil.WriteFile(filename, dump, os.ModePerm)
-			g.Expect(err).ShouldNot(gomega.HaveOccurred())
-			args = []string{
-				"proxy-status", fmt.Sprintf("%s.%s", podID, apps.Namespace.Name()), "--file", filename}
-			output, _ = istioCtl.InvokeOrFail(t, args)
-			g.Expect(output).To(gomega.ContainSubstring("Clusters Match"))
-			g.Expect(output).To(gomega.ContainSubstring("Listeners Match"))
-			g.Expect(output).To(gomega.ContainSubstring("Routes Match"))
+			retry.UntilSuccessOrFail(t, func() error {
+				filename := "ps-configdump.json"
+				cs := ctx.Clusters().Default()
+				dump, err := cs.EnvoyDo(context.TODO(), podID, apps.Namespace.Name(), "GET", "config_dump", nil)
+				g.Expect(err).ShouldNot(gomega.HaveOccurred())
+				err = ioutil.WriteFile(filename, dump, os.ModePerm)
+				g.Expect(err).ShouldNot(gomega.HaveOccurred())
+				args = []string{
+					"proxy-status", fmt.Sprintf("%s.%s", podID, apps.Namespace.Name()), "--file", filename}
+				output, _ = istioCtl.InvokeOrFail(t, args)
+				return expectSubstrings(output, "Clusters Match", "Listeners Match", "Routes Match")
+			})
 		})
 }
 

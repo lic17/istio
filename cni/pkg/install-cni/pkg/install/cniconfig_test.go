@@ -279,7 +279,7 @@ func TestGetCNIConfigFilepath(t *testing.T) {
 				return
 			case err := <-errChan:
 				t.Fatal(err)
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(250 * time.Millisecond):
 				if len(c.delayedConfName) > 0 {
 					// Delayed case
 					// Write delayed CNI config file
@@ -311,7 +311,7 @@ func TestGetCNIConfigFilepath(t *testing.T) {
 				}
 			case err := <-errChan:
 				t.Fatal(err)
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(250 * time.Millisecond):
 				t.Fatalf("timed out waiting for expected %s", expectedFilepath)
 			}
 		})
@@ -351,6 +351,11 @@ func TestInsertCNIConfig(t *testing.T) {
 		{
 			name:                 "list network file",
 			existingConfFilename: "list.conflist",
+			newConfFilename:      "istio-cni.conf",
+		},
+		{
+			name:                 "list network file with existing istio",
+			existingConfFilename: "list-with-istio.conflist",
 			newConfFilename:      "istio-cni.conf",
 		},
 	}

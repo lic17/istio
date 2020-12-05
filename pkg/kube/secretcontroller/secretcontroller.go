@@ -21,9 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sync"
 	"time"
 
+	"go.uber.org/atomic"
 	corev1 "k8s.io/api/core/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -65,8 +65,9 @@ type Controller struct {
 	updateCallback updateSecretCallback
 	removeCallback removeSecretCallback
 
-	mu          sync.RWMutex
-	initialSync bool
+	syncInterval time.Duration
+
+	initialSync atomic.Bool
 }
 
 // RemoteCluster defines cluster struct
@@ -168,7 +169,7 @@ func (c *Controller) Run(stopCh <-chan struct{}) {
 
 	// Wait for the caches to be synced before starting workers
 	log.Info("Waiting for informer caches to sync")
-	if !cache.WaitForCacheSync(stopCh, c.informer.HasSynced) {
+	if !kube.WaitForCacheSyncInterval(stopCh, c.syncInterval, c.informer.HasSynced) {
 		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
 		return
 	}
@@ -178,19 +179,23 @@ func (c *Controller) Run(stopCh <-chan struct{}) {
 }
 
 func (c *Controller) HasSynced() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.initialSync
+	return c.initialSync.Load()
 }
 
 // StartSecretController creates the secret controller.
-func StartSecretController(k8s kubernetes.Interface, addCallback addSecretCallback,
-	updateCallback updateSecretCallback, removeCallback removeSecretCallback, namespace string) *Controller {
-	stopCh := make(chan struct{})
+func StartSecretController(
+	k8s kubernetes.Interface,
+	addCallback addSecretCallback, updateCallback updateSecretCallback,
+	removeCallback removeSecretCallback,
+	namespace string,
+	syncInterval time.Duration,
+	stop <-chan struct{},
+) *Controller {
 	clusterStore := newClustersStore()
 	controller := NewController(k8s, namespace, clusterStore, addCallback, updateCallback, removeCallback)
+	controller.syncInterval = syncInterval
 
-	go controller.Run(stopCh)
+	go controller.Run(stop)
 
 	return controller
 }
@@ -225,9 +230,7 @@ func (c *Controller) processNextItem() bool {
 
 func (c *Controller) processItem(secretName string) error {
 	if secretName == initialSyncSignal {
-		c.mu.Lock()
-		c.initialSync = true
-		c.mu.Unlock()
+		c.initialSync.Store(true)
 		return nil
 	}
 

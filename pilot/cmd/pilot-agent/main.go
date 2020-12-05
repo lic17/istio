@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"strings"
@@ -26,7 +25,6 @@ import (
 	"github.com/gogo/protobuf/types"
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
-	"google.golang.org/grpc/grpclog"
 
 	meshconfig "istio.io/api/mesh/v1alpha1"
 	"istio.io/istio/pilot/cmd/pilot-agent/status"
@@ -118,11 +116,9 @@ var (
 	// TODO: default to same as discovery address
 	caEndpointEnv = env.RegisterStringVar("CA_ADDR", "", "Address of the spiffee certificate provider. Defaults to discoveryAddress").Get()
 
-	// This is also disabled by presence of the SDS socket directory
-	enableGatewaySDSEnv = env.RegisterBoolVar("ENABLE_INGRESS_GATEWAY_SDS", false,
-		"Enable provisioning gateway secrets. Requires Secret read permission").Get()
-	trustDomainEnv = env.RegisterStringVar("TRUST_DOMAIN", "",
+	trustDomainEnv = env.RegisterStringVar("TRUST_DOMAIN", "cluster.local",
 		"The trust domain for spiffe certificates").Get()
+
 	secretTTLEnv = env.RegisterDurationVar("SECRET_TTL", 24*time.Hour,
 		"The cert lifetime requested by istio agent").Get()
 	secretRotationGracePeriodRatioEnv = env.RegisterFloatVar("SECRET_GRACE_PERIOD_RATIO", 0.5,
@@ -169,7 +165,6 @@ var (
 		PersistentPreRunE: configureLogging,
 		RunE: func(c *cobra.Command, args []string) error {
 			cmd.PrintFlags(c.Flags())
-			grpclog.SetLoggerV2(grpclog.NewLoggerV2(ioutil.Discard, ioutil.Discard, ioutil.Discard))
 
 			// Extract pod variables.
 			podName := podNameVar.Get()
@@ -262,7 +257,6 @@ var (
 			}
 
 			secOpts.EnableWorkloadSDS = true
-			secOpts.EnableGatewaySDS = enableGatewaySDSEnv
 			secOpts.CAProviderName = caProviderEnv
 
 			secOpts.TrustDomain = trustDomainEnv
@@ -355,6 +349,7 @@ var (
 				Node:                role.ServiceNode(),
 				LogLevel:            proxyLogLevel,
 				ComponentLogLevel:   proxyComponentLogLevel,
+				LogAsJSON:           loggingOptions.JSONEncoding,
 				PilotSubjectAltName: pilotSAN,
 				NodeIPs:             role.IPAddresses,
 				STSPort:             stsPort,
@@ -483,7 +478,7 @@ func init() {
 // No CLI parameters.
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		log.Errora(err)
+		log.Error(err)
 		os.Exit(-1)
 	}
 }

@@ -15,6 +15,7 @@
 package util
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -31,7 +32,6 @@ import (
 	"github.com/golang/protobuf/ptypes/wrappers"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
-	"gopkg.in/d4l3k/messagediff.v1"
 
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/features"
@@ -381,7 +381,7 @@ func TestBuildConfigInfoMetadata(t *testing.T) {
 	for _, v := range cases {
 		t.Run(v.name, func(tt *testing.T) {
 			got := BuildConfigInfoMetadata(v.in)
-			if diff, equal := messagediff.PrettyDiff(got, v.want); !equal {
+			if diff := cmp.Diff(got, v.want, protocmp.Transform()); diff != "" {
 				tt.Errorf("BuildConfigInfoMetadata(%v) produced incorrect result:\ngot: %v\nwant: %v\nDiff: %s", v.in, got, v.want, diff)
 			}
 		})
@@ -404,7 +404,19 @@ func TestAddConfigInfoMetadata(t *testing.T) {
 				GroupVersionKind: collections.IstioNetworkingV1Alpha3Destinationrules.Resource().GroupVersionKind(),
 			},
 			nil,
-			nil,
+			&core.Metadata{
+				FilterMetadata: map[string]*structpb.Struct{
+					IstioMetadataKey: {
+						Fields: map[string]*structpb.Value{
+							"config": {
+								Kind: &structpb.Value_StringValue{
+									StringValue: "/apis/networking.istio.io/v1alpha3/namespaces/default/destination-rule/svcA",
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			"empty metadata",
@@ -519,9 +531,9 @@ func TestAddConfigInfoMetadata(t *testing.T) {
 
 	for _, v := range cases {
 		t.Run(v.name, func(tt *testing.T) {
-			AddConfigInfoMetadata(v.meta, v.in)
-			if diff, equal := messagediff.PrettyDiff(v.meta, v.want); !equal {
-				tt.Errorf("AddConfigInfoMetadata(%v) produced incorrect result:\ngot: %v\nwant: %v\nDiff: %s", v.in, v.meta, v.want, diff)
+			got := AddConfigInfoMetadata(v.meta, v.in)
+			if diff := cmp.Diff(got, v.want, protocmp.Transform()); diff != "" {
+				tt.Errorf("AddConfigInfoMetadata(%v) produced incorrect result:\ngot: %v\nwant: %v\nDiff: %s", v.in, got, v.want, diff)
 			}
 		})
 	}
@@ -1236,6 +1248,25 @@ func TestEndpointMetadata(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := BuildLbEndpointMetadata(tt.network, tt.tlsMode, tt.workloadName, tt.namespace, tt.labels); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Unexpected Endpoint metadata got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestByteCount(t *testing.T) {
+	cases := []struct {
+		in  int
+		out string
+	}{
+		{1, "1B"},
+		{1000, "1.0kB"},
+		{1_000_000, "1.0MB"},
+		{1_500_000, "1.5MB"},
+	}
+	for _, tt := range cases {
+		t.Run(fmt.Sprint(tt.in), func(t *testing.T) {
+			if got := ByteCount(tt.in); got != tt.out {
+				t.Fatalf("got %v wanted %v", got, tt.out)
 			}
 		})
 	}

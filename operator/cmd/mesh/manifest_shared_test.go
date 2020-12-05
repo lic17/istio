@@ -206,7 +206,7 @@ func fakeControllerReconcile(inFile string, chartSource chartSourceType) (*Objec
 
 	iop.Spec.InstallPackagePath = string(chartSource)
 
-	if err := createNamespace(testK8Interface, iop.Namespace); err != nil {
+	if err := createNamespace(testK8Interface, iop.Namespace, networkName(iop)); err != nil {
 		return nil, err
 	}
 
@@ -264,7 +264,7 @@ func applyWithReconciler(reconciler *helmreconciler.HelmReconciler, manifest str
 		Name:    name.IstioOperatorComponentName,
 		Content: manifest,
 	}
-	_, _, err := reconciler.ApplyManifest(m)
+	_, _, err := reconciler.ApplyManifest(m, false)
 	return err
 }
 

@@ -90,10 +90,10 @@ sidecarInjectorWebhook:
   # Only one environment should have this enabled.
   enableNamespacesByDefault: false
 
-  # Enable objectSelector to filter out pods with no need for sidecar before calling istio-sidecar-injector.
-  # It is disabled by default since this function will only work after k8s v1.15.
+  # Enable objectSelector to filter out pods with no need for sidecar before calling istiod.
+  # It is enabled by default as the minimum supported Kubernetes version is 1.15+
   objectSelector:
-    enabled: false
+    enabled: true
     autoInject: true
 
   rewriteAppHTTPProbe: true
@@ -150,7 +150,7 @@ ownerName: ""
 # meshConfig defines runtime configuration of components, including Istiod and istio-agent behavior
 # See https://istio.io/docs/reference/config/istio.mesh.v1alpha1/ for all available options
 meshConfig:
-
+  enablePrometheusMerge: true
   # Config for the default ProxyConfig.
   # Initially using directly the proxy metadata - can also be activated using annotations
   # on the pod. This is an unsupported low-level API, pending review and decisions on
@@ -180,6 +180,8 @@ meshConfig:
   # No hurry to do this in 1.6, we're trying to prove the code.
 
 global:
+  # Used to locate istiod.
+  istioNamespace: istio-system
   # enable pod disruption budget for the control plane, which is used to
   # ensure Istio control plane components are gradually upgraded or recovered.
   defaultPodDisruptionBudget:
@@ -478,13 +480,11 @@ global:
       # zipkin service (port 9411) in the same namespace as the other istio components.
       address: ""
 
-  # The trust domain corresponds to the trust root of a system
-  # Refer to https://github.com/spiffe/spiffe/blob/master/standards/SPIFFE-ID.md#21-trust-domain
-  # Indicate the domain used in SPIFFE identity URL
-  # The default depends on the environment.
-  #   kubernetes: cluster.local
-  #   else:  default dns domain
-  trustDomain: "cluster.local"
-
   # Use the Mesh Control Protocol (MCP) for configuring Istiod. Requires an MCP source.
   useMCP: false
+
+  # Deprecated, use meshConfig.trustDomain
+  trustDomain: ""
+base:
+  # For istioctl usage to disable istio config crds in base
+  enableIstioConfigCRDs: true

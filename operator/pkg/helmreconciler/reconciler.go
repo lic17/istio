@@ -32,6 +32,7 @@ import (
 
 	"istio.io/api/label"
 	"istio.io/api/operator/v1alpha1"
+	"istio.io/istio/istioctl/pkg/install/k8sversion"
 	valuesv1alpha1 "istio.io/istio/operator/pkg/apis/istio/v1alpha1"
 	"istio.io/istio/operator/pkg/metrics"
 	"istio.io/istio/operator/pkg/name"
@@ -107,9 +108,6 @@ func NewHelmReconciler(client client.Client, restConfig *rest.Config, iop *value
 		iop = &valuesv1alpha1.IstioOperator{}
 		iop.Spec = &v1alpha1.IstioOperatorSpec{}
 	}
-	if operatorRevision, found := os.LookupEnv("REVISION"); found {
-		iop.Spec.Revision = operatorRevision
-	}
 	var cs *kubernetes.Clientset
 	var err error
 	if restConfig != nil {
@@ -166,6 +164,8 @@ func (h *HelmReconciler) processRecursive(manifests name.ManifestMap) *v1alpha1.
 	// wg waits for all manifest processing goroutines to finish
 	var wg sync.WaitGroup
 
+	serverSideApply := h.CheckSSAEnabled()
+
 	for c, ms := range manifests {
 		c, ms := c, ms
 		wg.Add(1)
@@ -192,7 +192,7 @@ func (h *HelmReconciler) processRecursive(manifests name.ManifestMap) *v1alpha1.
 					Name:    c,
 					Content: name.MergeManifestSlices(ms),
 				}
-				processedObjs, deployedObjects, err = h.ApplyManifest(m)
+				processedObjs, deployedObjects, err = h.ApplyManifest(m, serverSideApply)
 				if err != nil {
 					status = v1alpha1.InstallStatus_ERROR
 				} else if len(processedObjs) != 0 || deployedObjects > 0 {
@@ -223,6 +223,23 @@ func (h *HelmReconciler) processRecursive(manifests name.ManifestMap) *v1alpha1.
 	return out
 }
 
+// CheckSSAEnabled is a helper function to check whether ServerSideApply should be used when applying manifests.
+func (h *HelmReconciler) CheckSSAEnabled() bool {
+	if h.restConfig != nil {
+		// check k8s minor version
+		k8sVer, err := k8sversion.GetKubernetesVersion(h.restConfig)
+		if err != nil {
+			scope.Errorf("failed to get k8s version: %s", err)
+		}
+		// There is a mutatingwebhook in gke that would corrupt the managedFields, which is fixed in k8s 1.18.
+		// See: https://github.com/kubernetes/kubernetes/issues/96351
+		if k8sVer >= 18 {
+			return true
+		}
+	}
+	return false
+}
+
 // Delete resources associated with the custom resource instance
 func (h *HelmReconciler) Delete() error {
 	defer func() {
@@ -237,7 +254,7 @@ func (h *HelmReconciler) Delete() error {
 	// Delete IOP with revision:
 	// for this case we update the status field to pending if there are still proxies pointing to this revision
 	// and we do not prune shared resources, same effect as `istioctl uninstall --revision foo` command.
-	status, err := h.PruneControlPlaneByRevisionWithController(iop.Spec.Namespace, iop.Spec.Revision)
+	status, err := h.PruneControlPlaneByRevisionWithController(valuesv1alpha1.Namespace(iop.Spec), iop.Spec.Revision)
 	if err != nil {
 		return err
 	}
@@ -362,14 +379,6 @@ func (h *HelmReconciler) getCoreOwnerLabels() (map[string]string, error) {
 	}
 	labels[istioVersionLabelStr] = version.Info.Version
 
-	return labels, nil
-}
-
-func (h *HelmReconciler) addComponentLabels(coreLabels map[string]string, componentName string) map[string]string {
-	labels := map[string]string{}
-	for k, v := range coreLabels {
-		labels[k] = v
-	}
 	revision := ""
 	if h.iop != nil {
 		revision = h.iop.Spec.Revision
@@ -378,6 +387,15 @@ func (h *HelmReconciler) addComponentLabels(coreLabels map[string]string, compon
 		revision = "default"
 	}
 	labels[label.IstioRev] = revision
+
+	return labels, nil
+}
+
+func (h *HelmReconciler) addComponentLabels(coreLabels map[string]string, componentName string) map[string]string {
+	labels := map[string]string{}
+	for k, v := range coreLabels {
+		labels[k] = v
+	}
 
 	labels[IstioComponentLabelStr] = componentName
 

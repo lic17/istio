@@ -212,7 +212,7 @@ func TestServiceScoping(t *testing.T) {
 		proxy := s.SetupProxy(p)
 
 		endpoints := xdstest.ExtractClusterEndpoints(s.Clusters(proxy))
-		eps := endpoints["inbound|9080|custom-http|sidecar.app"]
+		eps := endpoints["inbound|9080||"]
 		if !listEqualUnordered(eps, []string{"/var/run/someuds.sock"}) {
 			t.Fatalf("expected /var/run/someuds.sock, got %v", eps)
 		}
@@ -264,9 +264,9 @@ func TestSidecarListeners(t *testing.T) {
 			Select("{.resources[?(@.address.socketAddress.portValue==15001)]}").
 			Equals("virtualOutbound", "{.name}").
 			Equals("0.0.0.0", "{.address.socketAddress.address}").
-			Equals(wellknown.TCPProxy, "{.filterChains[0].filters[0].name}").
-			Equals("PassthroughCluster", "{.filterChains[0].filters[0].typedConfig.cluster}").
-			Equals("PassthroughCluster", "{.filterChains[0].filters[0].typedConfig.statPrefix}").
+			Equals(wellknown.TCPProxy, "{.filterChains[1].filters[0].name}").
+			Equals("PassthroughCluster", "{.filterChains[1].filters[0].typedConfig.cluster}").
+			Equals("PassthroughCluster", "{.filterChains[1].filters[0].typedConfig.statPrefix}").
 			Equals(true, "{.hiddenEnvoyDeprecatedUseOriginalDst}").
 			CheckOrFail(t)
 	})

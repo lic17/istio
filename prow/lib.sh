@@ -14,6 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Output a message, with a timestamp matching istio log format
+function log() {
+  echo -e "$(date -u '+%Y-%m-%dT%H:%M:%S.%NZ')\t$*"
+}
+
+# Trace runs the provided command and records additional timing information
+# NOTE: to avoid spamming the logs, we disable xtrace and re-enable it before executing the function
+# and after completion. If xtrace was never set, this will result in xtrace being enabled.
+# Ideally we would restore the old xtrace setting, but I don't think its possible to do that without also log-spamming
+# If we need to call it from a context without xtrace we can just make a new function.
+function trace() {
+  { set +x; } 2>/dev/null
+  log "Running '${1}'"
+  start="$(date -u +%s.%N)"
+  { set -x; } 2>/dev/null
+
+  "${@:2}"
+
+  { set +x; } 2>/dev/null
+  elapsed=$( date +%s.%N --date="$start seconds ago" )
+  log "Command '${1}' complete in ${elapsed}s"
+  # Write to YAML file as well for easy reading by tooling
+  echo "'${1}': $elapsed" >> "${ARTIFACTS}/trace.yaml"
+  { set -x; } 2>/dev/null
+}
+
 function setup_gcloud_credentials() {
   if [[ $(command -v gcloud) ]]; then
     gcloud auth configure-docker -q
@@ -98,7 +124,7 @@ function setup_kind_registry() {
   if [[ "${running}" != 'true' ]]; then
       docker run \
         -d --restart=always -p "${KIND_REGISTRY_PORT}:5000" --name "${KIND_REGISTRY_NAME}" \
-        registry:2
+        gcr.io/istio-testing/registry:2
 
     # Allow kind nodes to reach the registry
     docker network connect "kind" "${KIND_REGISTRY_NAME}"
@@ -109,7 +135,7 @@ function setup_kind_registry() {
     # TODO get context/config from existing variables
     kind export kubeconfig --name="${cluster}"
     for node in $(kind get nodes --name="${cluster}"); do
-      kubectl annotate node "${node}" "kind.x-k8s.io/registry=localhost:${KIND_REGISTRY_PORT}";
+      kubectl annotate node "${node}" "kind.x-k8s.io/registry=localhost:${KIND_REGISTRY_PORT}" --overwrite;
     done
   done
 }

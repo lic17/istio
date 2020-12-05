@@ -153,6 +153,15 @@ func getMaxCidrPrefix(addr string) uint32 {
 	return 32
 }
 
+func ListContains(haystack []string, needle string) bool {
+	for _, n := range haystack {
+		if needle == n {
+			return true
+		}
+	}
+	return false
+}
+
 // ConvertAddressToCidr converts from string to CIDR proto
 func ConvertAddressToCidr(addr string) *core.CidrRange {
 	if len(addr) == 0 {
@@ -261,16 +270,34 @@ func SortVirtualHosts(hosts []*route.VirtualHost) {
 	})
 }
 
-// IsIstioVersionGE15 checks whether the given Istio version is greater than or equals 1.5.
-func IsIstioVersionGE15(node *model.Proxy) bool {
-	return node.IstioVersion == nil ||
-		node.IstioVersion.Compare(&model.IstioVersion{Major: 1, Minor: 5, Patch: -1}) >= 0
+// IsIstioVersionGE19 checks whether the given Istio version is greater than or equals 1.9.
+func IsIstioVersionGE19(node *model.Proxy) bool {
+	return node == nil || node.IstioVersion == nil ||
+		node.IstioVersion.Compare(&model.IstioVersion{Major: 1, Minor: 9, Patch: -1}) >= 0
 }
 
 // IsIstioVersionGE18 checks whether the given Istio version is greater than or equals 1.8.
 func IsIstioVersionGE18(node *model.Proxy) bool {
-	return node.IstioVersion == nil ||
+	return node == nil || node.IstioVersion == nil ||
 		node.IstioVersion.Compare(&model.IstioVersion{Major: 1, Minor: 8, Patch: -1}) >= 0
+}
+
+// IsIstioVersionGE181 checks whether the given Istio version is greater than or equals 1.8.1
+func IsIstioVersionGE181(node *model.Proxy) bool {
+	return node == nil || node.IstioVersion == nil ||
+		node.IstioVersion.Compare(&model.IstioVersion{Major: 1, Minor: 8, Patch: 1}) >= 0
+}
+
+func BuildInboundSubsetKey(node *model.Proxy, subsetName string, hostname host.Name, servicePort int, endpointPort int) string {
+	if IsIstioVersionGE181(node) {
+		// On 1.8.1+ Proxies, we use format inbound|endpointPort||. Telemetry no longer requires the hostname
+		return model.BuildSubsetKey(model.TrafficDirectionInbound, "", "", endpointPort)
+	} else if IsIstioVersionGE18(node) {
+		// On 1.8.0 Proxies, we used format inbound|servicePort||. Since changing a cluster name leads to a 503
+		// blip on upgrade, we will support this legacy format.
+		return model.BuildSubsetKey(model.TrafficDirectionInbound, "", "", servicePort)
+	}
+	return model.BuildSubsetKey(model.TrafficDirectionInbound, subsetName, hostname, servicePort)
 }
 
 func IsProtocolSniffingEnabledForPort(port *model.Port) bool {
@@ -385,18 +412,16 @@ func cloneLocalityLbEndpoints(endpoints []*endpoint.LocalityLbEndpoints) []*endp
 // BuildConfigInfoMetadata builds core.Metadata struct containing the
 // name.namespace of the config, the type, etc.
 func BuildConfigInfoMetadata(config config.Meta) *core.Metadata {
-	metadata := &core.Metadata{
-		FilterMetadata: map[string]*pstruct.Struct{},
-	}
-	AddConfigInfoMetadata(metadata, config)
-	return metadata
+	return AddConfigInfoMetadata(nil, config)
 }
 
 // AddConfigInfoMetadata adds name.namespace of the config, the type, etc
-// to the given core.Metadata struct.
-func AddConfigInfoMetadata(metadata *core.Metadata, config config.Meta) {
+// to the given core.Metadata struct, if metadata is not initialized, build a new metadata.
+func AddConfigInfoMetadata(metadata *core.Metadata, config config.Meta) *core.Metadata {
 	if metadata == nil {
-		return
+		metadata = &core.Metadata{
+			FilterMetadata: map[string]*pstruct.Struct{},
+		}
 	}
 	s := "/apis/" + config.GroupVersionKind.Group + "/" + config.GroupVersionKind.Version + "/namespaces/" + config.Namespace + "/" +
 		strcase.CamelCaseToKebabCase(config.GroupVersionKind.Kind) + "/" + config.Name
@@ -410,6 +435,7 @@ func AddConfigInfoMetadata(metadata *core.Metadata, config config.Meta) {
 			StringValue: s,
 		},
 	}
+	return metadata
 }
 
 // AddSubsetToMetadata will build a new core.Metadata struct containing the
@@ -677,4 +703,20 @@ func MultiErrorFormat() multierror.ErrorFormatFunc {
 			"%d errors occurred:\n\t%s\n\n",
 			len(es), strings.Join(points, "\n\t"))
 	}
+}
+
+// ByteCount returns a human readable byte format
+// Inspired by https://yourbasic.org/golang/formatting-byte-size-to-human-readable-format/
+func ByteCount(b int) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%dB", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB",
+		float64(b)/float64(div), "kMGTPE"[exp])
 }
